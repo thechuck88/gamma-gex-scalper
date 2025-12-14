@@ -92,7 +92,7 @@ def send_discord_entry_alert(setup, credit, strikes, tp_pct, order_id):
                     {"name": "Strategy", "value": setup['strategy'], "inline": True},
                     {"name": "Direction", "value": setup['direction'], "inline": True},
                     {"name": "Confidence", "value": setup['confidence'], "inline": True},
-                    # REDACTED: Strikes (proprietary - reveals GEX pin)
+                    {"name": "Strikes", "value": strikes, "inline": True},
                     {"name": "Credit", "value": f"${credit:.2f} (${dollar_credit:.0f})", "inline": True},
                     {"name": "TP Target", "value": f"{tp_target}%", "inline": True},
                     {"name": "Stop Loss", "value": "10%", "inline": True},

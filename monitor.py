@@ -161,7 +161,7 @@ def send_discord_exit_alert(order_id, strategy, strikes, entry_credit, exit_valu
                 "color": color,
                 "fields": [
                     {"name": "Strategy", "value": strategy, "inline": True},
-                    # REDACTED: Strikes (proprietary - reveals GEX pin)
+                    {"name": "Strikes", "value": strikes, "inline": True},
                     {"name": "Entry Credit", "value": f"${entry_credit:.2f}", "inline": True},
                     {"name": "Exit Value", "value": f"${exit_value:.2f}", "inline": True},
                     {"name": "P/L $", "value": f"${pl_dollar:+.2f}", "inline": True},
