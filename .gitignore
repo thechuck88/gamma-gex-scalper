@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Logs
+*.log
+*.log.*
+*.gz
+
+# Data files
+data/*.json
+data/*.csv
+data/*.db
+data/*.sqlite
+
+# Keep data directory structure but ignore contents
+!data/.gitkeep
+
+# Environment
+.env
+.venv
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
