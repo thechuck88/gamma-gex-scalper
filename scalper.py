@@ -19,6 +19,68 @@ from config import (PAPER_ACCOUNT_ID, LIVE_ACCOUNT_ID, TRADIER_LIVE_KEY, TRADIER
                     DISCORD_DELAYED_ENABLED, DISCORD_DELAYED_WEBHOOK_URL, DISCORD_DELAY_SECONDS)
 from threading import Timer
 
+# ==================== RETRY LOGIC ====================
+def retry_api_call(func, max_attempts=3, base_delay=2.0, description="API call"):
+    """
+    Retry API calls with exponential backoff.
+
+    Args:
+        func: Callable that returns requests.Response
+        max_attempts: Maximum retry attempts (default 3)
+        base_delay: Base delay in seconds for exponential backoff (default 2.0)
+        description: Description of the call for logging
+
+    Returns:
+        requests.Response if successful
+        None if all attempts failed
+    """
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = func()
+
+            # Success on 2xx
+            if 200 <= response.status_code < 300:
+                if attempt > 1:
+                    log(f"[RETRY] {description} succeeded on attempt {attempt}/{max_attempts}")
+                return response
+
+            # Server error (5xx) - retry
+            if 500 <= response.status_code < 600:
+                if attempt < max_attempts:
+                    delay = base_delay * (2 ** (attempt - 1))
+                    log(f"[RETRY] {description} got {response.status_code}, retrying in {delay}s (attempt {attempt}/{max_attempts})")
+                    time.sleep(delay)
+                    continue
+                else:
+                    log(f"[RETRY] {description} failed after {max_attempts} attempts: {response.status_code}")
+                    return response
+
+            # Client error (4xx) - don't retry
+            log(f"[RETRY] {description} failed with {response.status_code} (no retry for 4xx)")
+            return response
+
+        except requests.exceptions.Timeout:
+            if attempt < max_attempts:
+                delay = base_delay * (2 ** (attempt - 1))
+                log(f"[RETRY] {description} timeout, retrying in {delay}s (attempt {attempt}/{max_attempts})")
+                time.sleep(delay)
+                continue
+            else:
+                log(f"[RETRY] {description} timeout after {max_attempts} attempts")
+                return None
+
+        except requests.exceptions.ConnectionError as e:
+            if attempt < max_attempts:
+                delay = base_delay * (2 ** (attempt - 1))
+                log(f"[RETRY] {description} connection error, retrying in {delay}s (attempt {attempt}/{max_attempts})")
+                time.sleep(delay)
+                continue
+            else:
+                log(f"[RETRY] {description} connection error after {max_attempts} attempts: {e}")
+                return None
+
+    return None
+
 # ==================== DISCORD ALERTS ====================
 def _send_to_webhook(url, msg):
     """Helper to send message to a webhook URL."""
@@ -244,9 +306,25 @@ def get_rsi(symbol="SPY", period=14):
         loss = (-delta).where(delta < 0, 0)
         avg_gain = gain.rolling(window=period, min_periods=period).mean()
         avg_loss = loss.rolling(window=period, min_periods=period).mean()
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
-        return round(rsi.iloc[-1], 1)
+
+        # Handle edge cases to prevent division by zero
+        # Standard RSI: If avg_loss = 0 (all gains), RSI = 100
+        #               If avg_gain = 0 (all losses), RSI = 0
+        avg_gain_val = avg_gain.iloc[-1]
+        avg_loss_val = avg_loss.iloc[-1]
+
+        if avg_loss_val == 0 or pd.isna(avg_loss_val):
+            # No losses in period = maximum overbought
+            rsi_val = 100.0
+        elif avg_gain_val == 0 or pd.isna(avg_gain_val):
+            # No gains in period = maximum oversold
+            rsi_val = 0.0
+        else:
+            # Standard RSI calculation
+            rs = avg_gain_val / avg_loss_val
+            rsi_val = 100 - (100 / (1 + rs))
+
+        return round(rsi_val, 1)
     except Exception as e:
         log(f"RSI calc error: {e}")
         return 50  # Default to neutral on error
@@ -672,14 +750,41 @@ try:
         })
 
     log("Sending entry order...")
-    r = requests.post(f"{BASE_URL}accounts/{TRADIER_ACCOUNT_ID}/orders", headers=HEADERS, data=entry_data, timeout=15)
+    r = retry_api_call(
+        lambda: requests.post(f"{BASE_URL}accounts/{TRADIER_ACCOUNT_ID}/orders",
+                              headers=HEADERS, data=entry_data, timeout=15),
+        description="Entry order placement"
+    )
+
+    if r is None:
+        log(f"ENTRY FAILED: No response after retries")
+        raise SystemExit
 
     if r.status_code != 200:
         log(f"ENTRY FAILED: {r.status_code} {r.text}")
         raise SystemExit
 
-    order_id = r.json()["order"]["id"]
-    log(f"ENTRY SUCCESS → Real Order ID: {order_id}")
+    # Safe JSON access with validation (prevent orphaned orders)
+    try:
+        response_data = r.json()
+        order_data = response_data.get("order")
+
+        if not order_data:
+            log(f"ERROR: No 'order' key in response: {response_data}")
+            raise SystemExit("Order placement failed: Invalid API response format")
+
+        order_id = order_data.get("id")
+
+        if not order_id:
+            log(f"ERROR: No 'id' in order data: {order_data}")
+            raise SystemExit("Order placement failed: No order ID returned")
+
+        log(f"ENTRY SUCCESS → Real Order ID: {order_id}")
+
+    except (ValueError, TypeError) as e:
+        log(f"ERROR: Failed to parse order response: {e}")
+        log(f"Response text: {r.text}")
+        raise SystemExit("Order placement failed: Cannot parse API response")
 
     # === REAL CREDIT + FINAL TP/SL ===
     # Wait briefly for fill, then fetch actual fill price

@@ -3,19 +3,23 @@
 
 import os
 
-# Tradier Account IDs
-PAPER_ACCOUNT_ID = os.getenv("TRADIER_PAPER_ACCOUNT_ID", "VA45627947")
-LIVE_ACCOUNT_ID  = os.getenv("TRADIER_LIVE_ACCOUNT_ID", "6YA47852")
+# Tradier Account IDs (no fallback - fail fast if not set)
+PAPER_ACCOUNT_ID = os.getenv("TRADIER_PAPER_ACCOUNT_ID")
+LIVE_ACCOUNT_ID  = os.getenv("TRADIER_LIVE_ACCOUNT_ID")
 
 # Tradier API Keys
 TRADIER_SANDBOX_KEY = os.getenv("TRADIER_SANDBOX_KEY")
 TRADIER_LIVE_KEY    = os.getenv("TRADIER_LIVE_KEY")
 
-# Validate required keys
+# Validate required credentials (fail fast on startup)
 if not TRADIER_SANDBOX_KEY:
     raise EnvironmentError("TRADIER_SANDBOX_KEY not set in environment")
 if not TRADIER_LIVE_KEY:
     raise EnvironmentError("TRADIER_LIVE_KEY not set in environment")
+if not PAPER_ACCOUNT_ID:
+    raise EnvironmentError("TRADIER_PAPER_ACCOUNT_ID not set in environment")
+if not LIVE_ACCOUNT_ID:
+    raise EnvironmentError("TRADIER_LIVE_ACCOUNT_ID not set in environment")
 
 # These are just defaults — scalper will override
 DEFAULT_ACCOUNT_ID = PAPER_ACCOUNT_ID

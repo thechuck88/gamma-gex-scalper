@@ -115,6 +115,71 @@ def log(msg):
         f.write(line + '\n')
 
 # ============================================================================
+#                           RETRY LOGIC
+# ============================================================================
+
+def retry_api_call(func, max_attempts=3, base_delay=2.0, description="API call"):
+    """
+    Retry API calls with exponential backoff.
+
+    Args:
+        func: Callable that returns requests.Response
+        max_attempts: Maximum retry attempts (default 3)
+        base_delay: Base delay in seconds for exponential backoff (default 2.0)
+        description: Description of the call for logging
+
+    Returns:
+        requests.Response if successful
+        None if all attempts failed
+    """
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = func()
+
+            # Success on 2xx
+            if 200 <= response.status_code < 300:
+                if attempt > 1:
+                    log(f"[RETRY] {description} succeeded on attempt {attempt}/{max_attempts}")
+                return response
+
+            # Server error (5xx) - retry
+            if 500 <= response.status_code < 600:
+                if attempt < max_attempts:
+                    delay = base_delay * (2 ** (attempt - 1))
+                    log(f"[RETRY] {description} got {response.status_code}, retrying in {delay}s (attempt {attempt}/{max_attempts})")
+                    time.sleep(delay)
+                    continue
+                else:
+                    log(f"[RETRY] {description} failed after {max_attempts} attempts: {response.status_code}")
+                    return response
+
+            # Client error (4xx) - don't retry
+            log(f"[RETRY] {description} failed with {response.status_code} (no retry for 4xx)")
+            return response
+
+        except requests.exceptions.Timeout:
+            if attempt < max_attempts:
+                delay = base_delay * (2 ** (attempt - 1))
+                log(f"[RETRY] {description} timeout, retrying in {delay}s (attempt {attempt}/{max_attempts})")
+                time.sleep(delay)
+                continue
+            else:
+                log(f"[RETRY] {description} timeout after {max_attempts} attempts")
+                return None
+
+        except requests.exceptions.ConnectionError as e:
+            if attempt < max_attempts:
+                delay = base_delay * (2 ** (attempt - 1))
+                log(f"[RETRY] {description} connection error, retrying in {delay}s (attempt {attempt}/{max_attempts})")
+                time.sleep(delay)
+                continue
+            else:
+                log(f"[RETRY] {description} connection error after {max_attempts} attempts: {e}")
+                return None
+
+    return None
+
+# ============================================================================
 #                           DISCORD ALERTS
 # ============================================================================
 
@@ -277,13 +342,20 @@ def get_quotes(symbols):
         symbols_str = symbols
     
     try:
-        r = requests.get(
-            f"{BASE_URL}/markets/quotes",
-            headers=HEADERS,
-            params={"symbols": symbols_str, "greeks": "false"},
-            timeout=15
+        r = retry_api_call(
+            lambda: requests.get(
+                f"{BASE_URL}/markets/quotes",
+                headers=HEADERS,
+                params={"symbols": symbols_str, "greeks": "false"},
+                timeout=15
+            ),
+            description=f"Quote fetch ({symbols_str[:50]}...)"
         )
-        
+
+        if r is None:
+            log(f"Quotes API error: No response after retries")
+            return None
+
         if r.status_code != 200:
             log(f"Quotes API error: {r.status_code}")
             return None
@@ -375,13 +447,20 @@ def close_spread(order_data):
         data[f"quantity[{i}]"] = leg['quantity']
     
     try:
-        r = requests.post(
-            f"{BASE_URL}/accounts/{TRADIER_ACCOUNT_ID}/orders",
-            headers=HEADERS,
-            data=data,
-            timeout=15
+        r = retry_api_call(
+            lambda: requests.post(
+                f"{BASE_URL}/accounts/{TRADIER_ACCOUNT_ID}/orders",
+                headers=HEADERS,
+                data=data,
+                timeout=15
+            ),
+            description=f"Exit order for {symbol}"
         )
-        
+
+        if r is None:
+            log(f"Close order failed: No response after retries")
+            return False
+
         if r.status_code == 200:
             result = r.json()
             close_order_id = result.get("order", {}).get("id")
@@ -390,7 +469,7 @@ def close_spread(order_data):
         else:
             log(f"Close order failed: {r.status_code} - {r.text[:200]}")
             return False
-            
+
     except Exception as e:
         log(f"Close order error: {e}")
         return False
