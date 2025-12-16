@@ -8,7 +8,7 @@ print(f"[STARTUP] Scalper invoked at {__import__('datetime').datetime.now()}", f
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
 
-import datetime, os, requests, json, csv, pytz, time, sys, math
+import datetime, os, requests, json, csv, pytz, time, sys, math, fcntl
 import yfinance as yf
 import pandas as pd
 from datetime import date
@@ -197,14 +197,16 @@ if len(sys.argv) > 2 and sys.argv[2]:
     try:
         pin_override = float(sys.argv[2])
         dry_run = True
-    except:
+    except (ValueError, TypeError) as e:
+        print(f"Warning: Invalid pin_override '{sys.argv[2]}': {e}")
         pass
 
 if len(sys.argv) > 3 and sys.argv[3]:
     try:
         spx_override = float(sys.argv[3])
         dry_run = True
-    except:
+    except (ValueError, TypeError) as e:
+        print(f"Warning: Invalid spx_override '{sys.argv[3]}': {e}")
         pass
 
 TRADIER_ACCOUNT_ID = LIVE_ACCOUNT_ID if mode == "REAL" else PAPER_ACCOUNT_ID
@@ -234,17 +236,25 @@ def log(msg):
     print(f"[{datetime.datetime.now(ET).strftime('%H:%M:%S')}] {msg}")
 
 print(f"[{datetime.datetime.now(ET).strftime('%H:%M:%S')}] Scalper starting...")
-LOCK_MAX_AGE = 300  # 5 minutes - auto-clean stale locks
-if os.path.exists(LOCK_FILE):
-    lock_age = time.time() - os.path.getmtime(LOCK_FILE)
-    if lock_age > LOCK_MAX_AGE:
-        print(f"[{datetime.datetime.now(ET).strftime('%H:%M:%S')}] Stale lock file (age: {lock_age:.0f}s > {LOCK_MAX_AGE}s) — removing and continuing")
-        os.remove(LOCK_FILE)
-    else:
-        print(f"[{datetime.datetime.now(ET).strftime('%H:%M:%S')}] Lock file exists (age: {lock_age:.0f}s) — another instance running, exiting")
-        exit(0)
-open(LOCK_FILE, 'w').close()
-print(f"[{datetime.datetime.now(ET).strftime('%H:%M:%S')}] Lock acquired")
+
+# Acquire exclusive lock using fcntl (atomic, no race condition)
+# This prevents duplicate orders if multiple scalper instances start simultaneously
+try:
+    lock_fd = open(LOCK_FILE, 'w')
+    # Try to acquire exclusive lock (non-blocking)
+    # LOCK_EX = exclusive lock, LOCK_NB = non-blocking (fail immediately if locked)
+    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    # Write PID for debugging
+    lock_fd.write(f"{os.getpid()}\n")
+    lock_fd.flush()
+    print(f"[{datetime.datetime.now(ET).strftime('%H:%M:%S')}] Lock acquired (PID: {os.getpid()})")
+except BlockingIOError:
+    # Another instance holds the lock
+    print(f"[{datetime.datetime.now(ET).strftime('%H:%M:%S')}] Lock file exists — another instance running, exiting")
+    exit(0)
+except Exception as e:
+    print(f"[{datetime.datetime.now(ET).strftime('%H:%M:%S')}] Failed to acquire lock: {e}")
+    exit(1)
 
 # ==============================================
 #                  FUNCTIONS
@@ -257,7 +267,12 @@ def get_price(symbol, use_live=False):
         symbol: Ticker symbol
         use_live: If True, force LIVE API (default for market data)
 
-    Returns: price or None
+    Returns:
+        float: Price if available and valid
+        None: If quote unavailable or invalid
+
+    Note: NEVER returns invalid prices - all callers can safely assume
+          a non-None return is a valid numeric price > 0
     """
     # Always use LIVE API for market data - sandbox is delayed/stale
     url = "https://api.tradier.com/v1/markets/quotes"
@@ -265,16 +280,49 @@ def get_price(symbol, use_live=False):
 
     try:
         r = requests.get(url, headers=headers, params={"symbols": symbol}, timeout=10)
+
+        # Validate response
+        if r.status_code != 200:
+            log(f"Tradier quote failed for {symbol}: HTTP {r.status_code}")
+            return None
+
         data = r.json()
         q = data.get("quotes", {}).get("quote")
-        if not q: return None
-        if isinstance(q, list): q = q[0]
+
+        if not q:
+            log(f"Tradier quote empty for {symbol}")
+            return None
+
+        if isinstance(q, list):
+            q = q[0]
+
+        # Try to get price (last > bid > ask precedence)
         price = q.get("last") or q.get("bid") or q.get("ask")
-        if price:
-            return float(price)
+
+        if price is None:
+            log(f"Tradier quote has no price fields for {symbol}")
+            return None
+
+        # Convert to float and validate
+        try:
+            price_float = float(price)
+
+            # Sanity check: price must be positive
+            if price_float <= 0:
+                log(f"Tradier quote for {symbol} has invalid price: {price_float}")
+                return None
+
+            return price_float
+
+        except (ValueError, TypeError) as e:
+            log(f"Tradier quote for {symbol} has non-numeric price '{price}': {e}")
+            return None
+
+    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+        log(f"Tradier quote network error for {symbol}: {e}")
         return None
     except Exception as e:
-        log(f"Tradier quote failed for {symbol}: {e}")
+        log(f"Tradier quote unexpected error for {symbol}: {e}")
         return None
 
 def get_vix_yfinance():
@@ -856,7 +904,8 @@ try:
         try:
             with open(ORDERS_FILE, 'r') as f:
                 existing_orders = json.load(f)
-        except:
+        except (json.JSONDecodeError, IOError, ValueError) as e:
+            log(f"Error loading existing orders from {ORDERS_FILE}: {e}")
             existing_orders = []
 
     # Add new order with all tracking info
@@ -896,6 +945,18 @@ except SystemExit:
 except Exception as e:
     log(f"FATAL ERROR: {e}")
 finally:
-    if os.path.exists(LOCK_FILE):
-        os.remove(LOCK_FILE)
-        log("Lock file removed")
+    # Release lock (automatic on file close, but explicit is better)
+    try:
+        if 'lock_fd' in globals() and lock_fd:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            lock_fd.close()
+            log("Lock released")
+    except Exception as e:
+        log(f"Error releasing lock: {e}")
+
+    # Clean up lock file
+    try:
+        if os.path.exists(LOCK_FILE):
+            os.remove(LOCK_FILE)
+    except Exception as e:
+        log(f"Error removing lock file: {e}")

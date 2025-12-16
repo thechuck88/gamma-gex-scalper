@@ -552,7 +552,8 @@ def update_trade_log(order_id, exit_value, exit_reason, entry_credit, entry_time
                     entry_time = datetime.datetime.strptime(entry_time_str, '%Y-%m-%d %H:%M:%S')
                     entry_time = ET.localize(entry_time)
                     duration_min = (datetime.datetime.now(ET) - entry_time).total_seconds() / 60
-                except:
+                except (ValueError, TypeError, AttributeError) as e:
+                    log(f"Error parsing entry time '{entry_time_str}': {e}")
                     duration_min = 0
                 
                 # Calculate P/L
@@ -692,7 +693,8 @@ def check_and_close_positions():
                 entry_dt = datetime.datetime.strptime(entry_time, '%Y-%m-%d %H:%M:%S')
                 entry_dt = ET.localize(entry_dt)
                 position_age_sec = (now - entry_dt).total_seconds()
-            except:
+            except (ValueError, TypeError, AttributeError) as e:
+                log(f"Error parsing entry time '{entry_time}' for SL check: {e}")
                 position_age_sec = 9999  # If can't parse, assume old enough
 
             # Emergency stop - trigger immediately regardless of age
@@ -775,7 +777,8 @@ def get_todays_trades():
                     try:
                         pl_dollar = float(row['P/L_$'].replace('$', '').replace('+', ''))
                         trades.append({'pl_dollar': pl_dollar})
-                    except:
+                    except (ValueError, TypeError, AttributeError) as e:
+                        log(f"Error parsing P/L from row: {e}")
                         pass
     except Exception as e:
         log(f"Error reading trade log: {e}")

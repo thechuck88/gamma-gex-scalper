@@ -56,7 +56,8 @@ def calculate_stats(trades):
         try:
             credit = float(t.get('Entry_Credit', 0) or 0)
             total_credit += credit
-        except:
+        except (ValueError, TypeError) as e:
+            print(f"Warning: Invalid entry credit in trade: {e}")
             pass
 
         # Sum P&L
@@ -67,7 +68,8 @@ def calculate_stats(trades):
                 winners += 1
             elif pnl < 0:
                 losers += 1
-        except:
+        except (ValueError, TypeError) as e:
+            print(f"Warning: Invalid P/L in trade: {e}")
             pass
 
     return {
