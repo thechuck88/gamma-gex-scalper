@@ -573,8 +573,8 @@ def show_closed_today():
     print(f"  CLOSED TODAY")
     print(f"{'='*70}")
 
-    print(f"\n  {'Opened':<14} {'Strikes':<20} {'Entry':>6} {'Exit':>6} {'P/L':>8} {'%':>6} {'Dur':>5} {'Reason':<24}")
-    print(f"  {'-'*14} {'-'*20} {'-'*6} {'-'*6} {'-'*8} {'-'*6} {'-'*5} {'-'*24}")
+    print(f"\n  {'Opened':<14} {'Closed':<14} {'Strikes':<20} {'Entry':>6} {'Exit':>6} {'P/L':>8} {'%':>6} {'Dur':>5} {'Reason':<24}")
+    print(f"  {'-'*14} {'-'*14} {'-'*20} {'-'*6} {'-'*6} {'-'*8} {'-'*6} {'-'*5} {'-'*24}")
 
     total_pl = 0
     wins = 0
@@ -585,10 +585,11 @@ def show_closed_today():
         entry = trade.get('Entry_Credit', '0')
         exit_val = trade.get('Exit_Value', '0')
         open_time = trade.get('Timestamp_ET', '')
+        exit_time = trade.get('Exit_Time', '')
         pl_str = trade.get('P/L_$', '$0')
         pl_pct = trade.get('P/L_%', '0%')
         duration = trade.get('Duration_Min', '-')
-        reason = trade.get('Exit_Reason', 'N/A')[:24]
+        reason = trade.get('Exit_Reason', 'N/A')
 
         # Format open time (MM/DD HH:MM)
         try:
@@ -599,6 +600,25 @@ def show_closed_today():
                 time_str = '-'
         except:
             time_str = open_time[:14] if open_time else '-'
+
+        # Format exit time (HH:MM or EXPIRED)
+        exit_time_str = '-'
+        if exit_time:
+            # Check if reason indicates expiration
+            if 'Expiration' in reason or 'expir' in reason.lower():
+                exit_time_str = '\033[33mEXPIRED\033[0m'  # Yellow
+            else:
+                try:
+                    dt = datetime.strptime(exit_time, '%Y-%m-%d %H:%M:%S')
+                    exit_time_str = dt.strftime('%H:%M')
+                except:
+                    exit_time_str = exit_time.split(' ')[1][:5] if ' ' in exit_time else exit_time[:5]
+
+        # Shorten reason and highlight expiration
+        if 'Expiration' in reason:
+            reason_short = '\033[33m0DTE EXPIRED\033[0m'
+        else:
+            reason_short = reason[:24]
 
         # Format duration
         try:
@@ -642,10 +662,16 @@ def show_closed_today():
         except:
             pct_colored = f"{pl_pct:>6}"
 
-        print(f"  {time_str:<14} {strikes:<20} ${float(entry):>4.2f} ${float(exit_val):>4.2f} {pl_colored} {pct_colored} {dur_str:>5} {reason:<24}")
+        # Note: exit_time_str may contain ANSI codes, so we can't use format width
+        if '\033[' in exit_time_str:
+            # ANSI colored string - print without padding
+            print(f"  {time_str:<14} {exit_time_str:<14} {strikes:<20} ${float(entry):>4.2f} ${float(exit_val):>4.2f} {pl_colored} {pct_colored} {dur_str:>5} {reason_short:<24}")
+        else:
+            # Regular string - use format width
+            print(f"  {time_str:<14} {exit_time_str:<14} {strikes:<20} ${float(entry):>4.2f} ${float(exit_val):>4.2f} {pl_colored} {pct_colored} {dur_str:>5} {reason_short:<24}")
 
     # Summary
-    print(f"  {'-'*14} {'-'*20} {'-'*6} {'-'*6} {'-'*8} {'-'*6} {'-'*5} {'-'*24}")
+    print(f"  {'-'*14} {'-'*14} {'-'*20} {'-'*6} {'-'*6} {'-'*8} {'-'*6} {'-'*5} {'-'*24}")
 
     total_trades = wins + losses
     win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
