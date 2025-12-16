@@ -295,24 +295,37 @@ def send_discord_daily_summary(trades_today):
 # ============================================================================
 
 def load_orders():
-    """Load tracked orders from JSON file."""
+    """Load tracked orders from JSON file with file locking."""
+    import fcntl
     if not os.path.exists(ORDERS_FILE):
         return []
     try:
         with open(ORDERS_FILE, 'r') as f:
-            content = f.read().strip()
-            if not content:
-                return []
-            return json.loads(content)
+            # Use shared lock for reading (multiple readers allowed)
+            fcntl.flock(f, fcntl.LOCK_SH)
+            try:
+                content = f.read().strip()
+                if not content:
+                    return []
+                return json.loads(content)
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
     except (json.JSONDecodeError, Exception) as e:
         log(f"Warning: Could not load orders file: {e}")
         return []
 
 def save_orders(orders):
-    """Save tracked orders to JSON file."""
+    """Save tracked orders to JSON file with file locking."""
+    import fcntl
     os.makedirs(os.path.dirname(ORDERS_FILE), exist_ok=True)
+
+    # Use exclusive lock to prevent concurrent writes
     with open(ORDERS_FILE, 'w') as f:
-        json.dump(orders, f, indent=2)
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            json.dump(orders, f, indent=2)
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
 
 def add_order(order_data):
     """Add a new order to tracking."""

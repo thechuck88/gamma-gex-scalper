@@ -172,7 +172,9 @@ def send_discord_entry_alert(setup, credit, strikes, tp_pct, order_id):
             msg_delayed = msg.copy()
             msg_delayed["embeds"] = [msg["embeds"][0].copy()]
             msg_delayed["embeds"][0]["title"] = f"⏰ GEX SCALP ENTRY — {setup['strategy']} (delayed)"
-            Timer(DISCORD_DELAY_SECONDS, _send_to_webhook, [DISCORD_DELAYED_WEBHOOK_URL, msg_delayed]).start()
+            timer = Timer(DISCORD_DELAY_SECONDS, _send_to_webhook, [DISCORD_DELAYED_WEBHOOK_URL, msg_delayed])
+            timer.daemon = True  # Ensure thread cleans up (already default for Timer, but explicit is better)
+            timer.start()
 
     except Exception as e:
         print(f"Discord alert failed: {e}")
