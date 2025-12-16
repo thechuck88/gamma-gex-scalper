@@ -641,34 +641,36 @@ def show_closed_today():
         except:
             pl = 0
 
-        # Format P/L with color
-        if pl > 0:
-            pl_colored = f"\033[32m${pl:>+6.0f}\033[0m"
-        elif pl < 0:
-            pl_colored = f"\033[31m${pl:>+6.0f}\033[0m"
-        else:
-            pl_colored = f"${pl:>+6.0f}"
+        # Format entry and exit with proper alignment (6 chars total including $)
+        entry_str = f"${float(entry):>5.2f}"  # "$2.40" = 6 chars
+        exit_str = f"${float(exit_val):>5.2f}"  # "$2.90" = 6 chars
 
-        # Color the percentage
+        # Format P/L with color - pad BEFORE adding ANSI codes
+        # Format: "$    -50" or "$  +240" (8 chars visible)
+        pl_text = f"$ {pl:>+6.0f}"  # Build the 8-char string first
+        if pl > 0:
+            pl_colored = f"\033[32m{pl_text}\033[0m"
+        elif pl < 0:
+            pl_colored = f"\033[31m{pl_text}\033[0m"
+        else:
+            pl_colored = pl_text
+
+        # Color the percentage - pad BEFORE adding ANSI codes
+        # Format: "  +50%" or "  -21%" (6 chars visible)
         try:
             pct_val = float(pl_pct.replace('%', '').replace('+', ''))
-            pct_short = f"{pct_val:+.0f}%"
+            pct_text = f"{pct_val:>+5.0f}%"  # Build the 6-char string first
             if pct_val > 0:
-                pct_colored = f"\033[32m{pct_short:>6}\033[0m"
+                pct_colored = f"\033[32m{pct_text}\033[0m"
             elif pct_val < 0:
-                pct_colored = f"\033[31m{pct_short:>6}\033[0m"
+                pct_colored = f"\033[31m{pct_text}\033[0m"
             else:
-                pct_colored = f"{pct_short:>6}"
+                pct_colored = pct_text
         except:
             pct_colored = f"{pl_pct:>6}"
 
-        # Note: exit_time_str may contain ANSI codes, so we can't use format width
-        if '\033[' in exit_time_str:
-            # ANSI colored string - print without padding
-            print(f"  {time_str:<14} {exit_time_str:<14} {strikes:<20} ${float(entry):>4.2f} ${float(exit_val):>4.2f} {pl_colored} {pct_colored} {dur_str:>5} {reason_short:<24}")
-        else:
-            # Regular string - use format width
-            print(f"  {time_str:<14} {exit_time_str:<14} {strikes:<20} ${float(entry):>4.2f} ${float(exit_val):>4.2f} {pl_colored} {pct_colored} {dur_str:>5} {reason_short:<24}")
+        # Print with proper alignment (no additional padding for colored fields)
+        print(f"  {time_str:<14} {exit_time_str:<14} {strikes:<20} {entry_str:>6} {exit_str:>6} {pl_colored} {pct_colored} {dur_str:>5} {reason_short:<24}")
 
     # Summary
     print(f"  {'-'*14} {'-'*14} {'-'*20} {'-'*6} {'-'*6} {'-'*8} {'-'*6} {'-'*5} {'-'*24}")
