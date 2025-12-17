@@ -19,7 +19,10 @@ if not DISCORD_WEBHOOK:
         with open(env_file) as f:
             for line in f:
                 if line.startswith("DISCORD_WEBHOOK_URL="):
-                    DISCORD_WEBHOOK = line.strip().split("=", 1)[1]
+                    # Safe split with bounds checking
+                    parts = line.strip().split("=", 1)
+                    if len(parts) == 2:
+                        DISCORD_WEBHOOK = parts[1]
                     break
 
 def get_todays_trades():
@@ -52,22 +55,33 @@ def calculate_stats(trades):
         strat = t.get('Strategy', 'Unknown')
         strategies[strat] = strategies.get(strat, 0) + 1
 
-        # Sum credits
+        # Sum credits with bounds checking
         try:
             credit = float(t.get('Entry_Credit', 0) or 0)
-            total_credit += credit
+            # Sanity check: credit should be positive and reasonable (< $100)
+            if 0 <= credit <= 100:
+                total_credit += credit
+            else:
+                print(f"Warning: Suspicious entry credit {credit} (expected 0-100), skipping")
         except (ValueError, TypeError) as e:
             print(f"Warning: Invalid entry credit in trade: {e}")
             pass
 
-        # Sum P&L
+        # Sum P&L with bounds checking
         try:
-            pnl = float(t.get('P/L_$', 0) or 0)
-            total_pnl += pnl
-            if pnl > 0:
-                winners += 1
-            elif pnl < 0:
-                losers += 1
+            pnl_str = t.get('P/L_$', '0')
+            # Handle formatted strings like "$+50.00" or "-25.50"
+            pnl_clean = str(pnl_str).replace('$', '').replace('+', '').replace(',', '')
+            pnl = float(pnl_clean)
+            # Sanity check: P/L should be reasonable (within ±$10k per trade)
+            if -10000 <= pnl <= 10000:
+                total_pnl += pnl
+                if pnl > 0:
+                    winners += 1
+                elif pnl < 0:
+                    losers += 1
+            else:
+                print(f"Warning: Suspicious P/L {pnl} (expected ±10k), skipping")
         except (ValueError, TypeError) as e:
             print(f"Warning: Invalid P/L in trade: {e}")
             pass

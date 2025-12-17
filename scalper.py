@@ -86,7 +86,16 @@ def _send_to_webhook(url, msg):
     """Helper to send message to a webhook URL."""
     try:
         r = requests.post(url, json=msg, timeout=5)
-        print(f"[DISCORD] Webhook sent: {r.status_code} - {msg['embeds'][0]['title']}")
+        if r.status_code == 200 or r.status_code == 204:
+            print(f"[DISCORD] Webhook sent: {r.status_code} - {msg['embeds'][0]['title']}")
+        else:
+            # Log failed webhooks with full error details
+            print(f"[DISCORD] Webhook failed: {r.status_code} - {r.text}")
+            print(f"[DISCORD] Failed message title: {msg['embeds'][0]['title']}")
+    except requests.exceptions.Timeout:
+        print(f"[DISCORD] Alert failed: Timeout after 5s - {msg['embeds'][0]['title']}")
+    except requests.exceptions.ConnectionError as e:
+        print(f"[DISCORD] Alert failed: Connection error - {e}")
     except Exception as e:
         print(f"[DISCORD] Alert failed: {e}")
 
@@ -733,14 +742,30 @@ try:
     # === BUILD SYMBOLS & PLACE ORDER ===
     if setup['strategy'] == 'IC':
         call_short, call_long, put_short, put_long = strikes
-        short_syms = [f"SPXW{exp_short}C{int(call_short*1000):08d}", f"SPXW{exp_short}P{int(put_short*1000):08d}"]
-        long_syms  = [f"SPXW{exp_short}C{int(call_long*1000):08d}",  f"SPXW{exp_short}P{int(put_long*1000):08d}"]
+        # Validate strikes are numeric before building symbols
+        try:
+            call_short_int = int(float(call_short) * 1000)
+            call_long_int = int(float(call_long) * 1000)
+            put_short_int = int(float(put_short) * 1000)
+            put_long_int = int(float(put_long) * 1000)
+        except (ValueError, TypeError) as e:
+            log(f"FATAL: Invalid strike prices for IC: {strikes} - {e}")
+            raise SystemExit
+        short_syms = [f"SPXW{exp_short}C{call_short_int:08d}", f"SPXW{exp_short}P{put_short_int:08d}"]
+        long_syms  = [f"SPXW{exp_short}C{call_long_int:08d}",  f"SPXW{exp_short}P{put_long_int:08d}"]
         log(f"Placing IRON CONDOR: Calls {call_short}/{call_long} | Puts {put_short}/{put_long}")
     else:
         short_strike, long_strike = strikes
+        # Validate strikes are numeric before building symbols
+        try:
+            short_strike_int = int(float(short_strike) * 1000)
+            long_strike_int = int(float(long_strike) * 1000)
+        except (ValueError, TypeError) as e:
+            log(f"FATAL: Invalid strike prices for spread: {strikes} - {e}")
+            raise SystemExit
         is_call = setup['strategy'] == 'CALL'
-        short_sym = f"SPXW{exp_short}{'C' if is_call else 'P'}{int(short_strike*1000):08d}"
-        long_sym  = f"SPXW{exp_short}{'C' if is_call else 'P'}{int(long_strike*1000):08d}"
+        short_sym = f"SPXW{exp_short}{'C' if is_call else 'P'}{short_strike_int:08d}"
+        long_sym  = f"SPXW{exp_short}{'C' if is_call else 'P'}{long_strike_int:08d}"
         log(f"Placing {setup['strategy']} SPREAD {short_strike}/{long_strike}{'C' if is_call else 'P'}")
 
     # === EXPECTED CREDIT + FULL DOLLAR DISPLAY ===

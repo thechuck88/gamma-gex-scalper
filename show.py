@@ -141,24 +141,30 @@ def calculate_real_gex_pin(spx_price):
         return None
 
 
-def get_gex_pin(spx_price):
-    """Get GEX pin level - cached to file to avoid flip-flopping."""
+def get_gex_pin(spx_price, cache_duration_sec=1800):
+    """Get GEX pin level - cached to file to avoid flip-flopping.
+
+    Args:
+        spx_price: Current SPX price
+        cache_duration_sec: Cache validity duration in seconds (default 1800 = 30 min)
+                           Set to 0 to disable caching (always recalculate)
+    """
     import time
     import json
 
     CACHE_FILE = '/tmp/gex_pin_cache.json'
-    CACHE_DURATION = 1800  # 30 minutes
 
     now = time.time()
 
-    # Try to read from cache
-    try:
-        with open(CACHE_FILE, 'r') as f:
-            cache = json.load(f)
-            if (now - cache.get('timestamp', 0)) < CACHE_DURATION:
-                return cache['value']
-    except Exception as e:
-        pass
+    # Try to read from cache (skip if caching disabled)
+    if cache_duration_sec > 0:
+        try:
+            with open(CACHE_FILE, 'r') as f:
+                cache = json.load(f)
+                if (now - cache.get('timestamp', 0)) < cache_duration_sec:
+                    return cache['value']
+        except Exception as e:
+            pass
 
     # Calculate real GEX pin from options data
     pin = calculate_real_gex_pin(spx_price)

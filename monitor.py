@@ -187,7 +187,16 @@ def _send_to_webhook(url, msg):
     """Helper to send message to a webhook URL."""
     try:
         r = requests.post(url, json=msg, timeout=5)
-        log(f"[DISCORD] Webhook sent: {r.status_code} - {msg['embeds'][0]['title']}")
+        if r.status_code == 200 or r.status_code == 204:
+            log(f"[DISCORD] Webhook sent: {r.status_code} - {msg['embeds'][0]['title']}")
+        else:
+            # Log failed webhooks with full error details
+            log(f"[DISCORD] Webhook failed: {r.status_code} - {r.text}")
+            log(f"[DISCORD] Failed message title: {msg['embeds'][0]['title']}")
+    except requests.exceptions.Timeout:
+        log(f"[DISCORD] Alert failed: Timeout after 5s - {msg['embeds'][0]['title']}")
+    except requests.exceptions.ConnectionError as e:
+        log(f"[DISCORD] Alert failed: Connection error - {e}")
     except Exception as e:
         log(f"[DISCORD] Alert failed: {e}")
 
@@ -244,7 +253,9 @@ def send_discord_exit_alert(order_id, strategy, strikes, entry_credit, exit_valu
         if DISCORD_DELAYED_ENABLED and DISCORD_DELAYED_WEBHOOK_URL and MODE == "REAL":
             msg_delayed = {"embeds": [msg["embeds"][0].copy()]}
             msg_delayed["embeds"][0]["title"] = f"⏰ {emoji} GEX SCALP EXIT — {exit_reason} (delayed)"
-            Timer(DISCORD_DELAY_SECONDS, _send_to_webhook, [DISCORD_DELAYED_WEBHOOK_URL, msg_delayed]).start()
+            timer = Timer(DISCORD_DELAY_SECONDS, _send_to_webhook, [DISCORD_DELAYED_WEBHOOK_URL, msg_delayed])
+            timer.daemon = True  # Prevent thread leak - thread dies with main process
+            timer.start()
 
     except Exception as e:
         log(f"Discord exit alert failed: {e}")
@@ -285,7 +296,9 @@ def send_discord_daily_summary(trades_today):
         if DISCORD_DELAYED_ENABLED and DISCORD_DELAYED_WEBHOOK_URL and MODE == "REAL":
             msg_delayed = {"embeds": [msg["embeds"][0].copy()]}
             msg_delayed["embeds"][0]["title"] = "⏰ 📊 GEX SCALPER — Daily Summary (delayed)"
-            Timer(DISCORD_DELAY_SECONDS, _send_to_webhook, [DISCORD_DELAYED_WEBHOOK_URL, msg_delayed]).start()
+            timer = Timer(DISCORD_DELAY_SECONDS, _send_to_webhook, [DISCORD_DELAYED_WEBHOOK_URL, msg_delayed])
+            timer.daemon = True  # Prevent thread leak - thread dies with main process
+            timer.start()
 
     except Exception as e:
         log(f"Discord daily summary failed: {e}")
@@ -339,6 +352,29 @@ def remove_order(order_id):
     orders = load_orders()
     orders = [o for o in orders if o.get('order_id') != order_id]
     save_orders(orders)
+
+# ============================================================================
+#                           MARKET HOURS VALIDATION
+# ============================================================================
+
+def is_market_open():
+    """
+    Check if market is open for trading (9:30 AM - 4:00 PM ET, Mon-Fri).
+
+    Returns:
+        bool: True if market is open, False otherwise
+    """
+    now = datetime.datetime.now(ET)
+
+    # Check if weekend (Saturday=5, Sunday=6)
+    if now.weekday() >= 5:
+        return False
+
+    # Check if within trading hours (9:30 AM - 4:00 PM)
+    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+
+    return market_open <= now < market_close
 
 # ============================================================================
 #                           TRADIER API FUNCTIONS
@@ -417,17 +453,23 @@ def get_positions():
 def close_spread(order_data):
     """
     Close a spread position by placing opposite multileg order.
-    
+
     order_data should contain:
         - option_symbols: list of OCC symbols
         - short_indices: list of indices that were sold (need to buy back)
     """
     symbols = order_data.get('option_symbols', [])
     short_indices = order_data.get('short_indices', [])
-    
+
     if not symbols:
         log("No symbols in order data — cannot close")
         return False
+
+    # Validate market is open before placing order
+    if not is_market_open():
+        log("WARNING: Attempted to close position outside market hours — order will fail")
+        # Still attempt the order (broker will reject it cleanly)
+        # This allows the caller to handle post-market scenarios
     
     # Build closing legs
     legs = []
@@ -480,7 +522,8 @@ def close_spread(order_data):
             log(f"Close order placed: {close_order_id}")
             return True
         else:
-            log(f"Close order failed: {r.status_code} - {r.text[:200]}")
+            # Log full error response (don't truncate - critical for debugging)
+            log(f"Close order failed: {r.status_code} - {r.text}")
             return False
 
     except Exception as e:
@@ -563,7 +606,9 @@ def update_trade_log(order_id, exit_value, exit_reason, entry_credit, entry_time
                 # Calculate duration
                 try:
                     entry_time = datetime.datetime.strptime(entry_time_str, '%Y-%m-%d %H:%M:%S')
-                    entry_time = ET.localize(entry_time)
+                    # Only localize if not already timezone-aware
+                    if entry_time.tzinfo is None:
+                        entry_time = ET.localize(entry_time)
                     duration_min = (datetime.datetime.now(ET) - entry_time).total_seconds() / 60
                 except (ValueError, TypeError, AttributeError) as e:
                     log(f"Error parsing entry time '{entry_time_str}': {e}")
@@ -582,6 +627,7 @@ def update_trade_log(order_id, exit_value, exit_reason, entry_credit, entry_time
                     row[10] = f"{pl_pct:+.1f}%"
                     row[11] = exit_reason
                     row[12] = f"{duration_min:.0f}"
+                    updated = True
                 elif len(row) >= 11:
                     # Old format fallback
                     row[5] = exit_time
@@ -590,9 +636,15 @@ def update_trade_log(order_id, exit_value, exit_reason, entry_credit, entry_time
                     row[8] = f"{pl_pct:+.1f}%"
                     row[9] = exit_reason
                     row[10] = f"{duration_min:.0f}"
-                
-                updated = True
-                log(f"Trade log updated: {order_id} | {exit_reason} | P/L ${pl_dollar:+.2f} ({pl_pct:+.1f}%)")
+                    updated = True
+                else:
+                    # Row too short - log error and skip update
+                    log(f"ERROR: CSV row for order {order_id} has insufficient columns ({len(row)} < 11), skipping update")
+                    log(f"Row contents: {row}")
+                    updated = False
+
+                if updated:
+                    log(f"Trade log updated: {order_id} | {exit_reason} | P/L ${pl_dollar:+.2f} ({pl_pct:+.1f}%)")
                 break
         
         if updated:
@@ -704,7 +756,9 @@ def check_and_close_positions():
             # Calculate position age
             try:
                 entry_dt = datetime.datetime.strptime(entry_time, '%Y-%m-%d %H:%M:%S')
-                entry_dt = ET.localize(entry_dt)
+                # Only localize if not already timezone-aware
+                if entry_dt.tzinfo is None:
+                    entry_dt = ET.localize(entry_dt)
                 position_age_sec = (now - entry_dt).total_seconds()
             except (ValueError, TypeError, AttributeError) as e:
                 log(f"Error parsing entry time '{entry_time}' for SL check: {e}")
