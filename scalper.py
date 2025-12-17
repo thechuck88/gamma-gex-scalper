@@ -948,6 +948,9 @@ except Exception as e:
     log(f"FATAL ERROR: {e}")
 finally:
     # Release lock (automatic on file close, but explicit is better)
+    # IMPORTANT: Do NOT delete the lock file - fcntl locks are on file descriptors
+    # Deleting the file creates a race condition where multiple processes can acquire
+    # locks on different inodes of the same path
     try:
         if 'lock_fd' in globals() and lock_fd:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
@@ -955,10 +958,3 @@ finally:
             log("Lock released")
     except Exception as e:
         log(f"Error releasing lock: {e}")
-
-    # Clean up lock file
-    try:
-        if os.path.exists(LOCK_FILE):
-            os.remove(LOCK_FILE)
-    except Exception as e:
-        log(f"Error removing lock file: {e}")

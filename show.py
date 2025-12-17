@@ -37,7 +37,7 @@ def get_spx_price():
             price = q.get("last") or q.get("bid") or q.get("ask")
             if price and float(price) > 1000:
                 return float(price)
-    except:
+    except Exception as e:
         pass
     # Fallback to SPY * 10
     try:
@@ -48,7 +48,7 @@ def get_spx_price():
         if q:
             spy = float(q.get("last") or q.get("bid") or q.get("ask"))
             return spy * 10
-    except:
+    except Exception as e:
         pass
     return None
 
@@ -63,7 +63,7 @@ def get_vix():
         q = data.get("quotes", {}).get("quote")
         if q and q.get("last"):
             return float(q["last"])
-    except:
+    except Exception as e:
         pass
     # Fallback to yfinance
     try:
@@ -73,7 +73,7 @@ def get_vix():
             if hasattr(close, 'iloc'):
                 close = close.iloc[0]
             return float(close)
-    except:
+    except Exception as e:
         pass
     return None
 
@@ -137,7 +137,7 @@ def calculate_real_gex_pin(spx_price):
 
         return None
 
-    except:
+    except Exception as e:
         return None
 
 
@@ -157,7 +157,7 @@ def get_gex_pin(spx_price):
             cache = json.load(f)
             if (now - cache.get('timestamp', 0)) < CACHE_DURATION:
                 return cache['value']
-    except:
+    except Exception as e:
         pass
 
     # Calculate real GEX pin from options data
@@ -170,7 +170,7 @@ def get_gex_pin(spx_price):
     try:
         with open(CACHE_FILE, 'w') as f:
             json.dump({'value': pin, 'timestamp': now}, f)
-    except:
+    except Exception as e:
         pass
 
     return pin
@@ -195,7 +195,7 @@ def get_intraday_prices():
             closes = [float(c) for c in closes]
         # Convert SPY to SPX (multiply by 10)
         return [round(p * 10) for p in closes]
-    except:
+    except Exception as e:
         return []
 
 
@@ -364,7 +364,7 @@ def parse_option_symbol(symbol):
             'type': 'CALL' if opt_type == 'C' else 'PUT',
             'strike': strike
         }
-    except:
+    except Exception as e:
         return None
 
 def parse_date_acquired(date_acquired):
@@ -377,7 +377,7 @@ def parse_date_acquired(date_acquired):
         display = dt_et.strftime('%m/%d %H:%M ET')
         key = dt.strftime('%Y-%m-%d %H:%M')
         return display, key
-    except:
+    except Exception as e:
         return date_acquired[:16], date_acquired[:16]
 
 def format_pl(pl):
@@ -395,7 +395,7 @@ def load_orders(name):
     try:
         with open(orders_file, 'r') as f:
             return json.load(f)
-    except:
+    except Exception as e:
         return []
 
 
@@ -598,7 +598,7 @@ def show_closed_today():
                 time_str = dt.strftime('%m/%d %H:%M')
             else:
                 time_str = '-'
-        except:
+        except Exception as e:
             time_str = open_time[:14] if open_time else '-'
 
         # Format exit time (HH:MM or EXPIRED)
@@ -611,7 +611,7 @@ def show_closed_today():
                 try:
                     dt = datetime.strptime(exit_time, '%Y-%m-%d %H:%M:%S')
                     exit_time_str = dt.strftime('%H:%M')
-                except:
+                except Exception as e:
                     exit_time_str = exit_time.split(' ')[1][:5] if ' ' in exit_time else exit_time[:5]
 
         # Shorten reason and highlight expiration
@@ -627,7 +627,7 @@ def show_closed_today():
                 dur_str = f"{dur_min//60}h{dur_min%60:02d}"
             else:
                 dur_str = f"{dur_min}m"
-        except:
+        except Exception as e:
             dur_str = "-"
 
         # Parse P/L for coloring and totals
@@ -638,7 +638,7 @@ def show_closed_today():
                 wins += 1
             elif pl < 0:
                 losses += 1
-        except:
+        except Exception as e:
             pl = 0
 
         # Format entry and exit with proper alignment (6 chars total including $)
@@ -666,7 +666,7 @@ def show_closed_today():
                 pct_colored = f"\033[31m{pct_text}\033[0m"
             else:
                 pct_colored = pct_text
-        except:
+        except Exception as e:
             pct_colored = f"{pl_pct:>6}"
 
         # Print with proper alignment (no additional padding for colored fields)
@@ -708,7 +708,7 @@ def show_intraday_chart(trades):
                 time_part = exit_time.split(' ')[1] if ' ' in exit_time else exit_time
                 hour_min = time_part[:5]  # HH:MM
                 data_points.append((hour_min, pl))
-        except:
+        except Exception as e:
             pass
 
     if len(data_points) < 2:
