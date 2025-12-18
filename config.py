@@ -27,23 +27,23 @@ DEFAULT_KEY        = TRADIER_SANDBOX_KEY
 
 # Discord Webhook Settings
 DISCORD_ENABLED = True
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
+DISCORD_WEBHOOK_URL = os.getenv("GAMMA_DISCORD_WEBHOOK_URL", "")
 
 # Validate Discord webhook URL format (prevent typos/misconfigurations)
 if DISCORD_WEBHOOK_URL and not DISCORD_WEBHOOK_URL.startswith("https://discord.com/api/webhooks/"):
     raise ValueError(
-        f"Invalid DISCORD_WEBHOOK_URL format: must start with 'https://discord.com/api/webhooks/'\n"
+        f"Invalid GAMMA_DISCORD_WEBHOOK_URL format: must start with 'https://discord.com/api/webhooks/'\n"
         f"Got: {DISCORD_WEBHOOK_URL[:50]}..."
     )
 
 # Delayed webhook (7 min delay) - for free tier
 DISCORD_DELAYED_ENABLED = True
-DISCORD_DELAYED_WEBHOOK_URL = os.getenv("DISCORD_DELAYED_WEBHOOK_URL", "")
+DISCORD_DELAYED_WEBHOOK_URL = os.getenv("GAMMA_DISCORD_DELAYED_WEBHOOK_URL", "")
 
 # Validate delayed webhook URL format
 if DISCORD_DELAYED_WEBHOOK_URL and not DISCORD_DELAYED_WEBHOOK_URL.startswith("https://discord.com/api/webhooks/"):
     raise ValueError(
-        f"Invalid DISCORD_DELAYED_WEBHOOK_URL format: must start with 'https://discord.com/api/webhooks/'\n"
+        f"Invalid GAMMA_DISCORD_DELAYED_WEBHOOK_URL format: must start with 'https://discord.com/api/webhooks/'\n"
         f"Got: {DISCORD_DELAYED_WEBHOOK_URL[:50]}..."
     )
 
@@ -61,5 +61,5 @@ DISCORD_TTL_HEARTBEAT = 30 * 60      # 30 minutes - status updates
 DISCORD_TTL_DEFAULT = 2 * 3600       # 2 hours - default for other messages
 
 # Healthcheck.io heartbeat - alerts if monitor stops running
-HEALTHCHECK_URL = os.getenv("HEALTHCHECK_URL", "")
+HEALTHCHECK_URL = os.getenv("GAMMA_HEALTHCHECK_URL", "")
 HEALTHCHECK_ENABLED = bool(HEALTHCHECK_URL)
