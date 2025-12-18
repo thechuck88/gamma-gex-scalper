@@ -38,7 +38,8 @@ from config import (
     TRADIER_LIVE_KEY,
     TRADIER_SANDBOX_KEY,
     DISCORD_ENABLED,
-    DISCORD_WEBHOOK_URL,
+    DISCORD_WEBHOOK_LIVE_URL,
+    DISCORD_WEBHOOK_PAPER_URL,
     DISCORD_DELAYED_ENABLED,
     DISCORD_DELAYED_WEBHOOK_URL,
     DISCORD_DELAY_SECONDS,
@@ -109,12 +110,14 @@ HEADERS = {
 # Initialize Discord auto-delete with separate storage per mode
 discord_autodelete = None
 
-# Use separate storage files for LIVE and PAPER to avoid race conditions
+# Use separate storage files and webhooks for LIVE and PAPER to avoid race conditions
 if MODE == 'REAL':
     DISCORD_STORAGE_FILE = "/root/gamma/data/discord_messages_live.json"
+    DISCORD_WEBHOOK_URL = DISCORD_WEBHOOK_LIVE_URL
     HEALTHCHECK_URL = HEALTHCHECK_LIVE_URL
 else:
     DISCORD_STORAGE_FILE = "/root/gamma/data/discord_messages_paper.json"
+    DISCORD_WEBHOOK_URL = DISCORD_WEBHOOK_PAPER_URL
     HEALTHCHECK_URL = HEALTHCHECK_PAPER_URL
 
 # Enable healthcheck if URL is configured

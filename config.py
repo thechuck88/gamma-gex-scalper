@@ -26,14 +26,21 @@ DEFAULT_ACCOUNT_ID = PAPER_ACCOUNT_ID
 DEFAULT_KEY        = TRADIER_SANDBOX_KEY
 
 # Discord Webhook Settings
+# Separate webhooks for LIVE and PAPER modes
 DISCORD_ENABLED = True
-DISCORD_WEBHOOK_URL = os.getenv("GAMMA_DISCORD_WEBHOOK_URL", "")
+DISCORD_WEBHOOK_LIVE_URL = os.getenv("GAMMA_DISCORD_WEBHOOK_LIVE_URL", "")
+DISCORD_WEBHOOK_PAPER_URL = os.getenv("GAMMA_DISCORD_WEBHOOK_PAPER_URL", "")
 
 # Validate Discord webhook URL format (prevent typos/misconfigurations)
-if DISCORD_WEBHOOK_URL and not DISCORD_WEBHOOK_URL.startswith("https://discord.com/api/webhooks/"):
+if DISCORD_WEBHOOK_LIVE_URL and not DISCORD_WEBHOOK_LIVE_URL.startswith("https://discord.com/api/webhooks/"):
     raise ValueError(
-        f"Invalid GAMMA_DISCORD_WEBHOOK_URL format: must start with 'https://discord.com/api/webhooks/'\n"
-        f"Got: {DISCORD_WEBHOOK_URL[:50]}..."
+        f"Invalid GAMMA_DISCORD_WEBHOOK_LIVE_URL format: must start with 'https://discord.com/api/webhooks/'\n"
+        f"Got: {DISCORD_WEBHOOK_LIVE_URL[:50]}..."
+    )
+if DISCORD_WEBHOOK_PAPER_URL and not DISCORD_WEBHOOK_PAPER_URL.startswith("https://discord.com/api/webhooks/"):
+    raise ValueError(
+        f"Invalid GAMMA_DISCORD_WEBHOOK_PAPER_URL format: must start with 'https://discord.com/api/webhooks/'\n"
+        f"Got: {DISCORD_WEBHOOK_PAPER_URL[:50]}..."
     )
 
 # Delayed webhook (7 min delay) - for free tier
