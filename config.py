@@ -61,5 +61,6 @@ DISCORD_TTL_HEARTBEAT = 30 * 60      # 30 minutes - status updates
 DISCORD_TTL_DEFAULT = 2 * 3600       # 2 hours - default for other messages
 
 # Healthcheck.io heartbeat - alerts if monitor stops running
-HEALTHCHECK_URL = os.getenv("GAMMA_HEALTHCHECK_URL", "")
-HEALTHCHECK_ENABLED = bool(HEALTHCHECK_URL)
+# Separate URLs for LIVE and PAPER modes to track each independently
+HEALTHCHECK_LIVE_URL = os.getenv("GAMMA_HEALTHCHECK_LIVE_URL", "")
+HEALTHCHECK_PAPER_URL = os.getenv("GAMMA_HEALTHCHECK_PAPER_URL", "")

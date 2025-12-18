@@ -42,8 +42,8 @@ from config import (
     DISCORD_DELAYED_ENABLED,
     DISCORD_DELAYED_WEBHOOK_URL,
     DISCORD_DELAY_SECONDS,
-    HEALTHCHECK_URL,
-    HEALTHCHECK_ENABLED,
+    HEALTHCHECK_LIVE_URL,
+    HEALTHCHECK_PAPER_URL,
     DISCORD_AUTODELETE_ENABLED,
     DISCORD_AUTODELETE_STORAGE,
     DISCORD_TTL_SIGNALS,
@@ -112,8 +112,13 @@ discord_autodelete = None
 # Use separate storage files for LIVE and PAPER to avoid race conditions
 if MODE == 'REAL':
     DISCORD_STORAGE_FILE = "/root/gamma/data/discord_messages_live.json"
+    HEALTHCHECK_URL = HEALTHCHECK_LIVE_URL
 else:
     DISCORD_STORAGE_FILE = "/root/gamma/data/discord_messages_paper.json"
+    HEALTHCHECK_URL = HEALTHCHECK_PAPER_URL
+
+# Enable healthcheck if URL is configured
+HEALTHCHECK_ENABLED = bool(HEALTHCHECK_URL)
 
 if DISCORD_AUTODELETE_ENABLED:
     try:
