@@ -106,15 +106,31 @@ HEADERS = {
     "Authorization": f"Bearer {TRADIER_KEY}"
 }
 
-# Initialize Discord auto-delete
+# Initialize Discord auto-delete with separate storage per mode
 discord_autodelete = None
+
+# Use separate storage files for LIVE and PAPER to avoid race conditions
+if MODE == 'REAL':
+    DISCORD_STORAGE_FILE = "/root/gamma/data/discord_messages_live.json"
+else:
+    DISCORD_STORAGE_FILE = "/root/gamma/data/discord_messages_paper.json"
+
 if DISCORD_AUTODELETE_ENABLED:
-    discord_autodelete = DiscordAutoDelete(
-        storage_file=DISCORD_AUTODELETE_STORAGE,
-        default_ttl=DISCORD_TTL_DEFAULT
-    )
-    discord_autodelete.start_cleanup_thread()
-    print(f"Discord auto-delete enabled (default TTL: {DISCORD_TTL_DEFAULT}s)")
+    try:
+        discord_autodelete = DiscordAutoDelete(
+            storage_file=DISCORD_STORAGE_FILE,
+            default_ttl=DISCORD_TTL_DEFAULT
+        )
+        discord_autodelete.start_cleanup_thread()
+        print(f"[STARTUP] ✅ Discord auto-delete enabled ({MODE} mode, TTL: {DISCORD_TTL_DEFAULT}s)")
+        print(f"[STARTUP] ✅ Storage: {DISCORD_STORAGE_FILE}")
+    except Exception as e:
+        print(f"[STARTUP] ❌ Failed to initialize Discord auto-delete: {e}")
+        import traceback
+        traceback.print_exc()
+        discord_autodelete = None
+else:
+    print(f"[STARTUP] Discord auto-delete disabled")
 
 # ============================================================================
 #                              LOGGING
