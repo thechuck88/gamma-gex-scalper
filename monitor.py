@@ -43,9 +43,16 @@ from config import (
     DISCORD_DELAYED_WEBHOOK_URL,
     DISCORD_DELAY_SECONDS,
     HEALTHCHECK_URL,
-    HEALTHCHECK_ENABLED
+    HEALTHCHECK_ENABLED,
+    DISCORD_AUTODELETE_ENABLED,
+    DISCORD_AUTODELETE_STORAGE,
+    DISCORD_TTL_SIGNALS,
+    DISCORD_TTL_CRASHES,
+    DISCORD_TTL_HEARTBEAT,
+    DISCORD_TTL_DEFAULT
 )
 from threading import Timer
+from discord_autodelete import DiscordAutoDelete
 
 # Timezone
 ET = pytz.timezone('America/New_York')
@@ -98,6 +105,16 @@ HEADERS = {
     "Accept": "application/json",
     "Authorization": f"Bearer {TRADIER_KEY}"
 }
+
+# Initialize Discord auto-delete
+discord_autodelete = None
+if DISCORD_AUTODELETE_ENABLED:
+    discord_autodelete = DiscordAutoDelete(
+        storage_file=DISCORD_AUTODELETE_STORAGE,
+        default_ttl=DISCORD_TTL_DEFAULT
+    )
+    discord_autodelete.start_cleanup_thread()
+    print(f"Discord auto-delete enabled (default TTL: {DISCORD_TTL_DEFAULT}s)")
 
 # ============================================================================
 #                              LOGGING
@@ -183,22 +200,45 @@ def retry_api_call(func, max_attempts=3, base_delay=2.0, description="API call")
 #                           DISCORD ALERTS
 # ============================================================================
 
-def _send_to_webhook(url, msg):
-    """Helper to send message to a webhook URL."""
-    try:
-        r = requests.post(url, json=msg, timeout=5)
-        if r.status_code == 200 or r.status_code == 204:
-            log(f"[DISCORD] Webhook sent: {r.status_code} - {msg['embeds'][0]['title']}")
+def _send_to_webhook(url, msg, message_type="general"):
+    """Helper to send message to a webhook URL with auto-delete support."""
+    # Use auto-delete if available
+    if discord_autodelete:
+        # Determine TTL based on message type
+        ttl_map = {
+            'crash': DISCORD_TTL_CRASHES,
+            'heartbeat': DISCORD_TTL_HEARTBEAT,
+            'signal': DISCORD_TTL_SIGNALS,
+            'general': DISCORD_TTL_DEFAULT
+        }
+        ttl = ttl_map.get(message_type, DISCORD_TTL_DEFAULT)
+
+        message_id = discord_autodelete.send_message(
+            webhook_url=url,
+            message_data=msg,
+            ttl_seconds=ttl,
+            message_type=message_type
+        )
+        if message_id:
+            log(f"[DISCORD] Webhook sent (auto-delete in {ttl}s) - {msg['embeds'][0]['title']}")
         else:
-            # Log failed webhooks with full error details
-            log(f"[DISCORD] Webhook failed: {r.status_code} - {r.text}")
-            log(f"[DISCORD] Failed message title: {msg['embeds'][0]['title']}")
-    except requests.exceptions.Timeout:
-        log(f"[DISCORD] Alert failed: Timeout after 5s - {msg['embeds'][0]['title']}")
-    except requests.exceptions.ConnectionError as e:
-        log(f"[DISCORD] Alert failed: Connection error - {e}")
-    except Exception as e:
-        log(f"[DISCORD] Alert failed: {e}")
+            log(f"[DISCORD] Webhook failed - {msg['embeds'][0]['title']}")
+    else:
+        # Fallback to regular POST without auto-delete
+        try:
+            r = requests.post(url, json=msg, timeout=5)
+            if r.status_code == 200 or r.status_code == 204:
+                log(f"[DISCORD] Webhook sent: {r.status_code} - {msg['embeds'][0]['title']}")
+            else:
+                # Log failed webhooks with full error details
+                log(f"[DISCORD] Webhook failed: {r.status_code} - {r.text}")
+                log(f"[DISCORD] Failed message title: {msg['embeds'][0]['title']}")
+        except requests.exceptions.Timeout:
+            log(f"[DISCORD] Alert failed: Timeout after 5s - {msg['embeds'][0]['title']}")
+        except requests.exceptions.ConnectionError as e:
+            log(f"[DISCORD] Alert failed: Connection error - {e}")
+        except Exception as e:
+            log(f"[DISCORD] Alert failed: {e}")
 
 def send_heartbeat():
     """Send heartbeat ping to healthchecks.io to prove monitor is alive."""
@@ -247,13 +287,13 @@ def send_discord_exit_alert(order_id, strategy, strikes, entry_credit, exit_valu
         }
 
         # Send immediate alert
-        _send_to_webhook(DISCORD_WEBHOOK_URL, msg)
+        _send_to_webhook(DISCORD_WEBHOOK_URL, msg, message_type="signal")
 
         # Send delayed alert (7 min) to free tier - LIVE only
         if DISCORD_DELAYED_ENABLED and DISCORD_DELAYED_WEBHOOK_URL and MODE == "REAL":
             msg_delayed = {"embeds": [msg["embeds"][0].copy()]}
             msg_delayed["embeds"][0]["title"] = f"⏰ {emoji} GEX SCALP EXIT — {exit_reason} (delayed)"
-            timer = Timer(DISCORD_DELAY_SECONDS, _send_to_webhook, [DISCORD_DELAYED_WEBHOOK_URL, msg_delayed])
+            timer = Timer(DISCORD_DELAY_SECONDS, _send_to_webhook, [DISCORD_DELAYED_WEBHOOK_URL, msg_delayed, "signal"])
             timer.daemon = True  # Prevent thread leak - thread dies with main process
             timer.start()
 
@@ -290,13 +330,13 @@ def send_discord_daily_summary(trades_today):
         }
 
         # Send immediate alert
-        _send_to_webhook(DISCORD_WEBHOOK_URL, msg)
+        _send_to_webhook(DISCORD_WEBHOOK_URL, msg, message_type="signal")
 
         # Send delayed alert (7 min) to free tier - LIVE only
         if DISCORD_DELAYED_ENABLED and DISCORD_DELAYED_WEBHOOK_URL and MODE == "REAL":
             msg_delayed = {"embeds": [msg["embeds"][0].copy()]}
             msg_delayed["embeds"][0]["title"] = "⏰ 📊 GEX SCALPER — Daily Summary (delayed)"
-            timer = Timer(DISCORD_DELAY_SECONDS, _send_to_webhook, [DISCORD_DELAYED_WEBHOOK_URL, msg_delayed])
+            timer = Timer(DISCORD_DELAY_SECONDS, _send_to_webhook, [DISCORD_DELAYED_WEBHOOK_URL, msg_delayed, "signal"])
             timer.daemon = True  # Prevent thread leak - thread dies with main process
             timer.start()
 

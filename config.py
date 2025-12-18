@@ -49,6 +49,17 @@ if DISCORD_DELAYED_WEBHOOK_URL and not DISCORD_DELAYED_WEBHOOK_URL.startswith("h
 
 DISCORD_DELAY_SECONDS = 420  # 7 minutes
 
+# Discord Auto-Delete Settings
+# Messages will be automatically deleted after TTL expires
+DISCORD_AUTODELETE_ENABLED = True
+DISCORD_AUTODELETE_STORAGE = "/root/gamma/data/discord_messages.json"
+
+# TTL (time-to-live) in seconds for different message types
+DISCORD_TTL_SIGNALS = 24 * 3600      # 24 hours - trading signals
+DISCORD_TTL_CRASHES = 1 * 3600       # 1 hour - crash/error alerts
+DISCORD_TTL_HEARTBEAT = 30 * 60      # 30 minutes - status updates
+DISCORD_TTL_DEFAULT = 2 * 3600       # 2 hours - default for other messages
+
 # Healthcheck.io heartbeat - alerts if monitor stops running
 HEALTHCHECK_URL = os.getenv("HEALTHCHECK_URL", "")
 HEALTHCHECK_ENABLED = bool(HEALTHCHECK_URL)
