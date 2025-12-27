@@ -49,8 +49,9 @@ TRAILING_LOCK_IN_PCT = 0.10     # Lock in 10% profit when triggered
 TRAILING_DISTANCE_MIN = 0.08    # Minimum trail distance (8%)
 TRAILING_TIGHTEN_RATE = 0.4     # Tighten rate
 
-# Entry times (hours after market open: 9:36, 10:00, 11:00, 12:00, 13:00)
-ENTRY_TIMES = [0.1, 0.5, 1.5, 2.5, 3.5]  # Hours after 9:30 open
+# Entry times (hours after market open: 9:36, 10:00, 11:00, 12:00)
+# NOTE: 1 PM (13:00) removed - blocked by 2 PM cutoff (Fix #1)
+ENTRY_TIMES = [0.1, 0.5, 1.5, 2.5]  # Hours after 9:30 open (last entry at 12:00 PM)
 
 # 2025 FOMC meeting dates (announcement days)
 FOMC_DATES_2025 = [
@@ -460,8 +461,8 @@ def run_backtest(days=180, realistic=False):
 
     # Run simulation
     print("\nRunning simulation...")
-    print(f"Entry times: 9:36 AM, 10:00 AM, 11:00 AM, 12:00 PM, 1:00 PM")
-    print(f"VIX filter: < {VIX_MAX_THRESHOLD}")
+    print(f"Entry times: 9:36 AM, 10:00 AM, 11:00 AM, 12:00 PM")
+    print(f"Filters: VIX < {VIX_MAX_THRESHOLD}, 2 PM cutoff, min credit $1.00")
     print(f"Excluding: FOMC days, short trading days")
 
     trades = []
@@ -517,8 +518,19 @@ def run_backtest(days=180, realistic=False):
 
         # Try each entry time
         for entry_idx, hours_after_open in enumerate(ENTRY_TIMES):
-            entry_time_label = ['9:36', '10:00', '11:00', '12:00', '13:00'][entry_idx]
+            entry_time_label = ['9:36', '10:00', '11:00', '12:00'][entry_idx]
             hours_to_expiry = 6.5 - hours_after_open  # Market closes 4pm, 6.5hrs after 9:30
+
+            # FIX #1: Apply 2 PM cutoff (matches live scalper)
+            # 2 PM ET = 4.5 hours after 9:30 AM open
+            if hours_after_open >= 4.5:
+                continue  # Skip 2 PM and later entries
+
+            # FIX #2: Apply 3 PM absolute cutoff for 0DTE (matches live scalper)
+            # 3 PM ET = 5.5 hours after 9:30 AM open
+            # Note: With 2 PM cutoff above, this is redundant but kept for clarity
+            if hours_after_open >= 5.5:
+                continue  # Skip 3 PM and later entries (expiration risk)
 
             # BUG FIX (2025-12-27): Use close price instead of fake interpolation
             # OLD: Interpolated between open and close (fake smooth prices)
@@ -547,6 +559,24 @@ def run_backtest(days=180, realistic=False):
                 is_call = setup['strategy'] == 'CALL'
                 entry_credit = estimate_spread_credit(spx_at_entry, strikes[0], strikes[1], vix_val,
                                                       is_call=is_call, hours_to_expiry=hours_to_expiry)
+
+            # FIX #3: ABSOLUTE MINIMUM CREDIT CHECK (matches live scalper)
+            ABSOLUTE_MIN_CREDIT = 1.00  # Never trade below $1.00 regardless of time
+            if entry_credit < ABSOLUTE_MIN_CREDIT:
+                continue  # Skip this trade - credit too low
+
+            # FIX #3 (continued): Time-based minimum credit (matches live scalper)
+            # Calculate actual entry hour (9:30 + hours_after_open)
+            entry_hour = 9.5 + hours_after_open  # 9.5 = 9:30 AM
+            if entry_hour < 12:
+                MIN_CREDIT = 1.25   # Before noon
+            elif entry_hour < 13:
+                MIN_CREDIT = 1.50   # 12-1 PM
+            else:
+                MIN_CREDIT = 2.00   # 1-2 PM
+
+            if entry_credit < MIN_CREDIT:
+                continue  # Skip this trade - credit below time-based minimum
 
             # Simulate outcome
             outcome = simulate_trade_outcome(setup, entry_credit, spx_at_entry, spx_high, spx_low, spx_close, vix_val)

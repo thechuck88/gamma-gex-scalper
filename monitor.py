@@ -730,8 +730,18 @@ def update_trade_log(order_id, exit_value, exit_reason, entry_credit, entry_time
                 pl_pct = ((entry_credit - exit_value) / entry_credit) * 100 if entry_credit > 0 else 0
                 
                 # Update row: Exit_Time, Exit_Value, P/L_$, P/L_%, Exit_Reason, Duration_Min
-                # New CSV has Confidence and TP% at indices 5-6, so exit fields start at 7
-                if len(row) >= 13:
+                # New CSV format with Account_ID at index 2, exit fields start at 8
+                if len(row) >= 14:
+                    # New format: with Account_ID column (14 total columns)
+                    row[8] = exit_time
+                    row[9] = f"{exit_value:.2f}"
+                    row[10] = f"{pl_dollar:+.2f}"
+                    row[11] = f"{pl_pct:+.1f}%"
+                    row[12] = exit_reason
+                    row[13] = f"{duration_min:.0f}"
+                    updated = True
+                elif len(row) >= 13:
+                    # Old format without Account_ID (13 total columns) - backward compatibility
                     row[7] = exit_time
                     row[8] = f"{exit_value:.2f}"
                     row[9] = f"{pl_dollar:+.2f}"
@@ -740,7 +750,7 @@ def update_trade_log(order_id, exit_value, exit_reason, entry_credit, entry_time
                     row[12] = f"{duration_min:.0f}"
                     updated = True
                 elif len(row) >= 11:
-                    # Old format fallback
+                    # Very old format fallback
                     row[5] = exit_time
                     row[6] = f"{exit_value:.2f}"
                     row[7] = f"{pl_dollar:+.2f}"

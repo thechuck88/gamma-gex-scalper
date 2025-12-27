@@ -2,15 +2,20 @@
 """
 show.py — Display current option positions and P/L status
 Usage:
-  python show.py         # Show paper account
-  python show.py LIVE    # Show live account
-  python show.py ALL     # Show both accounts
+  python show.py                    # Show paper account
+  python show.py LIVE               # Show live account
+  python show.py ALL                # Show both accounts
+  python show.py --history 7        # Show last 7 days of closed trades
+  python show.py --history 30       # Show last 30 days
+  python show.py --history all      # Show all history
+  python show.py LIVE --history 7   # Combine account + history options
 """
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
 
 import sys
+import argparse
 import requests
 from collections import defaultdict
 from datetime import datetime
@@ -548,35 +553,96 @@ def show_account(name, account_id, api_key, base_url):
     print(f"  {'-'*30} {'-'*5} {'-'*10} {'-'*10} {'-'*12}")
     print(f"  {'TOTAL':<30} {'':>5} {'':>10} {'':>10} {format_pl(total_pl)}")
 
-def show_closed_today():
-    """Display trades closed today from trades.csv."""
+def show_closed_trades(days=None, account_mode="PAPER", account_id=None):
+    """Display closed trades from trades.csv.
+
+    Args:
+        days: Number of days to show (None=today only, 'all'=all history, N=last N days)
+        account_mode: Which account was shown (PAPER, LIVE, ALL)
+        account_id: Account ID to display in header
+    """
     import csv
     import os
+    from datetime import timedelta
 
     trade_log = "/root/gamma/data/trades.csv"
     if not os.path.exists(trade_log):
         return
 
-    today_str = datetime.now(ET).strftime('%Y-%m-%d')
+    now_et = datetime.now(ET)
+    today_str = now_et.strftime('%Y-%m-%d')
     closed_trades = []
+
+    # Calculate date cutoff and date range string
+    if days is None:
+        # Today only (default)
+        cutoff_date = None
+        date_range = today_str
+    elif days == 'all':
+        # All history
+        cutoff_date = datetime(2000, 1, 1).replace(tzinfo=ET)
+        date_range = "All Time"
+    else:
+        # Last N days
+        try:
+            cutoff_date = (now_et - timedelta(days=int(days))).replace(hour=0, minute=0, second=0, microsecond=0)
+            start_date = cutoff_date.strftime('%Y-%m-%d')
+            date_range = f"{start_date} to {today_str}"
+        except ValueError:
+            cutoff_date = None
+            date_range = today_str
 
     try:
         with open(trade_log, 'r') as f:
             reader = csv.DictReader(f)
             for row in reader:
-                # Check if closed today (Exit_Time starts with today's date)
                 exit_time = row.get('Exit_Time', '')
-                if exit_time.startswith(today_str):
-                    closed_trades.append(row)
+                if not exit_time:
+                    continue
+
+                # Filter by account_id (if mode is not ALL)
+                if account_mode != "ALL" and account_id:
+                    row_account_id = row.get('Account_ID', '')
+                    if row_account_id and row_account_id != account_id:
+                        continue  # Skip trades from other accounts
+
+                # Filter by date range
+                if cutoff_date is None:
+                    # Today only
+                    if exit_time.startswith(today_str):
+                        closed_trades.append(row)
+                else:
+                    # Date range or all
+                    try:
+                        exit_dt = datetime.strptime(exit_time, '%Y-%m-%d %H:%M:%S').replace(tzinfo=ET)
+                        if exit_dt >= cutoff_date:
+                            closed_trades.append(row)
+                    except Exception as e:
+                        pass
     except Exception as e:
         print(f"Error reading trade log: {e}")
         return
 
     if not closed_trades:
+        if days == 'all' or (days and int(days) > 1):
+            print(f"\n{'='*70}")
+            if account_mode == "ALL":
+                print(f"  CLOSED TRADES (ALL ACCOUNTS) - {date_range}")
+            else:
+                acct_display = f"{account_mode}: {account_id}" if account_id else account_mode
+                print(f"  CLOSED TRADES ({acct_display}) - {date_range}")
+            print(f"{'='*70}")
+            print("  No trades found in history")
         return
 
+    # Build header with account and date range
     print(f"\n{'='*70}")
-    print(f"  CLOSED TODAY")
+    if account_mode == "ALL":
+        print(f"  CLOSED TRADES (ALL ACCOUNTS)")
+    else:
+        acct_display = f"{account_mode}: {account_id}" if account_id else account_mode
+        print(f"  CLOSED TRADES ({acct_display})")
+    print(f"  Period: {date_range}")
     print(f"{'='*70}")
 
     print(f"\n  {'Opened':<14} {'Closed':<14} {'Strikes':<20} {'Entry':>6} {'Exit':>6} {'P/L':>8} {'%':>6} {'Dur':>5} {'Reason':<24}")
@@ -696,8 +762,51 @@ def show_closed_today():
 
     print(f"  {'TOTAL':<14} {summary:<14} {'':>6} {'':>6} {total_colored}")
 
-    # Intraday P/L chart if we have trades
-    if len(closed_trades) >= 2:
+    # Extended stats for multi-day history
+    if days and days != 'today':
+        # Calculate average P/L per trade
+        avg_pl = total_pl / total_trades if total_trades > 0 else 0
+        avg_win = sum(float(t.get('P/L_$', '0').replace('$', '').replace('+', '').replace(',', ''))
+                     for t in closed_trades
+                     if float(t.get('P/L_$', '0').replace('$', '').replace('+', '').replace(',', '')) > 0) / wins if wins > 0 else 0
+        avg_loss = sum(float(t.get('P/L_$', '0').replace('$', '').replace('+', '').replace(',', ''))
+                      for t in closed_trades
+                      if float(t.get('P/L_$', '0').replace('$', '').replace('+', '').replace(',', '')) < 0) / losses if losses > 0 else 0
+
+        # Calculate average duration
+        durations = []
+        for t in closed_trades:
+            try:
+                dur = float(t.get('Duration_Min', '0'))
+                durations.append(dur)
+            except:
+                pass
+        avg_duration = sum(durations) / len(durations) if durations else 0
+
+        # Calculate profit factor
+        total_wins = sum(float(t.get('P/L_$', '0').replace('$', '').replace('+', '').replace(',', ''))
+                        for t in closed_trades
+                        if float(t.get('P/L_$', '0').replace('$', '').replace('+', '').replace(',', '')) > 0)
+        total_losses = abs(sum(float(t.get('P/L_$', '0').replace('$', '').replace('+', '').replace(',', ''))
+                              for t in closed_trades
+                              if float(t.get('P/L_$', '0').replace('$', '').replace('+', '').replace(',', '')) < 0))
+        profit_factor = total_wins / total_losses if total_losses > 0 else float('inf')
+
+        print(f"\n  PERIOD STATISTICS:")
+        print(f"  {'-'*70}")
+        print(f"  Avg P/L per trade: {format_pl(avg_pl)}")
+        print(f"  Avg Winner: {format_pl(avg_win)}  |  Avg Loser: {format_pl(avg_loss)}")
+        if avg_duration >= 60:
+            print(f"  Avg Duration: {int(avg_duration // 60)}h {int(avg_duration % 60):02d}m")
+        else:
+            print(f"  Avg Duration: {int(avg_duration)}m")
+        if profit_factor == float('inf'):
+            print(f"  Profit Factor: ∞ (no losses)")
+        else:
+            print(f"  Profit Factor: {profit_factor:.2f}")
+
+    # Intraday P/L chart if we have trades (only for single-day view)
+    if len(closed_trades) >= 2 and (not days or days == 'today'):
         show_intraday_chart(closed_trades)
 
 def show_intraday_chart(trades):
@@ -783,7 +892,17 @@ def show_intraday_chart(trades):
     print(f"  {times_line}")
 
 def main():
-    mode = sys.argv[1].upper() if len(sys.argv) > 1 else "PAPER"
+    # Parse arguments
+    parser = argparse.ArgumentParser(description='Display Tradier account positions and trade history')
+    parser.add_argument('account', nargs='?', default='PAPER',
+                       help='Account to show: PAPER (default), LIVE, or ALL')
+    parser.add_argument('--history', '-H', metavar='DAYS',
+                       help='Show trade history: number of days (e.g., 7, 30) or "all" for complete history')
+
+    args = parser.parse_args()
+
+    mode = args.account.upper()
+    history_days = args.history
 
     paper_url = "https://sandbox.tradier.com/v1"
     live_url = "https://api.tradier.com/v1"
@@ -791,16 +910,22 @@ def main():
     # Show market banner first
     show_market_banner()
 
+    # Track which account(s) to show in history
+    account_id_for_history = None
+
     if mode == "ALL":
         show_account("PAPER", PAPER_ACCOUNT_ID, TRADIER_SANDBOX_KEY, paper_url)
         show_account("LIVE", LIVE_ACCOUNT_ID, TRADIER_LIVE_KEY, live_url)
+        account_id_for_history = None  # ALL mode
     elif mode in ["LIVE", "REAL"]:
         show_account("LIVE", LIVE_ACCOUNT_ID, TRADIER_LIVE_KEY, live_url)
+        account_id_for_history = LIVE_ACCOUNT_ID
     else:
         show_account("PAPER", PAPER_ACCOUNT_ID, TRADIER_SANDBOX_KEY, paper_url)
+        account_id_for_history = PAPER_ACCOUNT_ID
 
-    # Show closed trades for today
-    show_closed_today()
+    # Show closed trades with optional history
+    show_closed_trades(days=history_days, account_mode=mode, account_id=account_id_for_history)
 
     print()
 

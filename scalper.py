@@ -15,7 +15,7 @@ from datetime import date
 
 # ==================== CONFIG ====================
 from config import (PAPER_ACCOUNT_ID, LIVE_ACCOUNT_ID, TRADIER_LIVE_KEY, TRADIER_SANDBOX_KEY,
-                    DISCORD_ENABLED, DISCORD_WEBHOOK_URL,
+                    DISCORD_ENABLED, DISCORD_WEBHOOK_LIVE_URL, DISCORD_WEBHOOK_PAPER_URL,
                     DISCORD_DELAYED_ENABLED, DISCORD_DELAYED_WEBHOOK_URL, DISCORD_DELAY_SECONDS)
 from threading import Timer
 
@@ -224,6 +224,9 @@ TRADIER_ACCOUNT_ID = LIVE_ACCOUNT_ID if mode == "REAL" else PAPER_ACCOUNT_ID
 TRADIER_KEY = TRADIER_LIVE_KEY if mode == "REAL" else TRADIER_SANDBOX_KEY
 BASE_URL = "https://api.tradier.com/v1/" if mode == "REAL" else "https://sandbox.tradier.com/v1/"
 HEADERS = {"Accept": "application/json", "Authorization": f"Bearer {TRADIER_KEY}"}
+
+# Set Discord webhook URL based on mode
+DISCORD_WEBHOOK_URL = DISCORD_WEBHOOK_LIVE_URL if mode == "REAL" else DISCORD_WEBHOOK_PAPER_URL
 
 TRADE_LOG_FILE = "/root/gamma/data/trades.csv"
 LOCK_FILE = "/tmp/gexscalper.lock"
@@ -575,6 +578,72 @@ def get_expected_credit(short_sym, long_sym):
         log(f"Warning: get_expected_credit failed: {e}")
         return None
 
+def check_spread_quality(short_sym, long_sym, expected_credit):
+    """
+    FIX #4: Check if bid/ask spread is tight enough for safe entry.
+
+    Returns True if spread is acceptable, False if too wide.
+
+    Logic:
+    - Calculate net spread: (short_ask - short_bid) - (long_ask - long_bid)
+    - If net spread > 25% of expected credit, too risky
+    - Example: $2.00 credit → max $0.50 net spread
+
+    Prevents instant stops from entry slippage.
+    """
+    try:
+        symbols = f"{short_sym},{long_sym}"
+        r = retry_api_call(
+            lambda: requests.get(f"{BASE_URL}/markets/quotes", headers=HEADERS,
+                               params={"symbols": symbols}, timeout=10),
+            max_attempts=2,
+            base_delay=0.5,
+            description=f"Spread quality check for {symbols}"
+        )
+
+        if r is None or r.status_code != 200:
+            log(f"Warning: Could not check spread quality for {symbols}")
+            return True  # Don't block trade on quote fetch failure
+
+        data = r.json()
+        quotes = data.get("quotes", {}).get("quote", [])
+        if isinstance(quotes, dict):
+            quotes = [quotes]
+        if len(quotes) < 2:
+            log(f"Warning: Incomplete quotes for spread quality check")
+            return True
+
+        # Short leg
+        short_bid = float(quotes[0].get("bid") or 0)
+        short_ask = float(quotes[0].get("ask") or 0)
+        short_spread = short_ask - short_bid
+
+        # Long leg
+        long_bid = float(quotes[1].get("bid") or 0)
+        long_ask = float(quotes[1].get("ask") or 0)
+        long_spread = long_ask - long_bid
+
+        # Net spread (what we pay in slippage)
+        net_spread = short_spread - long_spread  # Short spread costs us, long spread saves us
+        net_spread = abs(net_spread)  # Take absolute value
+
+        # Maximum acceptable spread: 25% of credit
+        max_spread = expected_credit * 0.25
+
+        log(f"Spread quality: short {short_spread:.2f}, long {long_spread:.2f}, net {net_spread:.2f}")
+        log(f"Max acceptable spread: ${max_spread:.2f} (25% of ${expected_credit:.2f} credit)")
+
+        if net_spread > max_spread:
+            log(f"❌ Spread too wide: ${net_spread:.2f} > ${max_spread:.2f} (instant slippage would trigger emergency stop)")
+            return False
+
+        log(f"✅ Spread acceptable: ${net_spread:.2f} ≤ ${max_spread:.2f}")
+        return True
+
+    except Exception as e:
+        log(f"Error checking spread quality: {e}")
+        return True  # Don't block trade on error
+
 def get_gex_trade_setup(pin_price, spx_price, vix):
     """
     Wrapper for core.gex_strategy.get_gex_trade_setup
@@ -606,14 +675,21 @@ def get_gex_trade_setup(pin_price, spx_price, vix):
 
 try:
     now_et = datetime.datetime.now(ET)
-    # Time cutoff only applies to LIVE trading - PAPER can trade anytime
-    if mode == "REAL" and now_et.hour >= CUTOFF_HOUR:
-        log(f"Time is {now_et.strftime('%H:%M')} ET — past cutoff. NO NEW TRADES.")
-        log("Existing OCO brackets remain active.")
-        send_discord_skip_alert("Past 3 PM ET cutoff", {'setup': 'Time cutoff'})
+
+    # FIX #1: Time cutoff applies to BOTH LIVE and PAPER (same risk profile)
+    if now_et.hour >= CUTOFF_HOUR:
+        log(f"Time is {now_et.strftime('%H:%M')} ET — past {CUTOFF_HOUR}:00 PM cutoff. NO NEW TRADES.")
+        log("Existing positions remain active for TP/SL management.")
+        send_discord_skip_alert(f"Past {CUTOFF_HOUR}:00 PM ET cutoff", {'setup': 'Time cutoff'})
         raise SystemExit
-    elif mode == "PAPER":
-        log(f"PAPER MODE — no time restrictions (current: {now_et.strftime('%H:%M')} ET)")
+
+    # FIX #2: ABSOLUTE CUTOFF - No trades in last hour of 0DTE (expiration risk)
+    ABSOLUTE_CUTOFF_HOUR = 15  # 3:00 PM ET - last hour before 4 PM expiration
+    if now_et.hour >= ABSOLUTE_CUTOFF_HOUR:
+        log(f"Time is {now_et.strftime('%H:%M')} ET — within last hour of 0DTE expiration")
+        log("NO TRADES — bid/ask spreads too wide, gamma risk too high")
+        send_discord_skip_alert(f"Last hour before 0DTE expiration ({now_et.strftime('%H:%M')} ET)", run_data)
+        raise SystemExit
 
     log("GEX Scalper started")
 
@@ -795,6 +871,17 @@ try:
         short_syms = [f"SPXW{exp_short}C{call_short_int:08d}", f"SPXW{exp_short}P{put_short_int:08d}"]
         long_syms  = [f"SPXW{exp_short}C{call_long_int:08d}",  f"SPXW{exp_short}P{put_long_int:08d}"]
         log(f"Placing IRON CONDOR: Calls {call_short}/{call_long} | Puts {put_short}/{put_long}")
+
+        # FIX #4: Check bid/ask spread quality for BOTH IC spreads
+        log("Checking call spread quality...")
+        call_spread_quality = check_spread_quality(short_syms[0], long_syms[0], call_credit)
+        log("Checking put spread quality...")
+        put_spread_quality = check_spread_quality(short_syms[1], long_syms[1], put_credit)
+
+        if not call_spread_quality or not put_spread_quality:
+            log("IC spread quality check failed — NO TRADE")
+            send_discord_skip_alert("Bid/ask spreads too wide (high slippage risk)", run_data)
+            raise SystemExit
     else:
         short_strike, long_strike = strikes
         # Validate strikes are numeric before building symbols
@@ -808,6 +895,15 @@ try:
         short_sym = f"SPXW{exp_short}{'C' if is_call else 'P'}{short_strike_int:08d}"
         long_sym  = f"SPXW{exp_short}{'C' if is_call else 'P'}{long_strike_int:08d}"
         log(f"Placing {setup['strategy']} SPREAD {short_strike}/{long_strike}{'C' if is_call else 'P'}")
+
+        # FIX #4: Check bid/ask spread quality
+        log("Checking spread quality...")
+        spread_quality = check_spread_quality(short_sym, long_sym, expected_credit)
+
+        if not spread_quality:
+            log("Spread quality check failed — NO TRADE")
+            send_discord_skip_alert("Bid/ask spreads too wide (high slippage risk)", run_data)
+            raise SystemExit
 
     # === EXPECTED CREDIT + FULL DOLLAR DISPLAY ===
     if setup['strategy'] == 'IC':
@@ -825,18 +921,26 @@ try:
             log("ERROR: Could not get option quotes — aborting trade")
             raise SystemExit
 
+    # FIX #3: ABSOLUTE MINIMUM CREDIT (prevents tiny premiums with no buffer)
+    ABSOLUTE_MIN_CREDIT = 1.00  # Never trade below $1.00 regardless of time
+
+    if expected_credit < ABSOLUTE_MIN_CREDIT:
+        log(f"Credit ${expected_credit:.2f} below absolute minimum ${ABSOLUTE_MIN_CREDIT:.2f} — NO TRADE")
+        send_discord_skip_alert(f"Credit ${expected_credit:.2f} below absolute minimum ${ABSOLUTE_MIN_CREDIT:.2f}", run_data)
+        raise SystemExit
+
     # === MINIMUM CREDIT CHECK (scales by time of day) ===
     # Later in day = thinner premiums = need higher minimum to justify risk
     if now_et.hour < 12:
-        MIN_CREDIT = 0.75   # Before noon: $0.75
+        MIN_CREDIT = 1.25   # Before noon: $1.25 (raised from $0.75)
     elif now_et.hour < 13:
-        MIN_CREDIT = 1.00   # 12-1 PM: $1.00
+        MIN_CREDIT = 1.50   # 12-1 PM: $1.50 (raised from $1.00)
     else:
-        MIN_CREDIT = 1.50   # 1-2 PM: $1.50 (after 2 PM blocked anyway)
+        MIN_CREDIT = 2.00   # 1-2 PM: $2.00 (raised from $1.50)
 
     if expected_credit < MIN_CREDIT:
-        log(f"Credit ${expected_credit:.2f} below minimum ${MIN_CREDIT:.2f} for this time — NO TRADE")
-        send_discord_skip_alert(f"Credit ${expected_credit:.2f} below ${MIN_CREDIT:.2f} minimum", run_data)
+        log(f"Credit ${expected_credit:.2f} below time-based minimum ${MIN_CREDIT:.2f} for {now_et.strftime('%H:%M')} ET — NO TRADE")
+        send_discord_skip_alert(f"Credit ${expected_credit:.2f} below ${MIN_CREDIT:.2f} minimum for {now_et.strftime('%H:%M')} ET", run_data)
         raise SystemExit
 
     dollar_credit = expected_credit * 100
@@ -851,9 +955,15 @@ try:
     log(f"{int((1-tp_pct)*100)}% PROFIT TARGET → Close at ${tp_price:.2f}  →  +${tp_profit:.0f} profit")
     log(f"10% STOP LOSS → Close at ${sl_price:.2f}  →  -${sl_loss:.0f} loss")
 
+    # FIX #7: Use limit order instead of market (prevent entry slippage)
+    # Accept up to 5% worse than mid-price to ensure fill
+    limit_price = round(expected_credit * 0.95, 2)
+    log(f"Limit order price: ${limit_price:.2f} (5% worse than mid ${expected_credit:.2f})")
+
     # === REAL ENTRY ORDER ===
     entry_data = {
-        "class": "multileg", "symbol": "SPXW", "type": "market", "duration": "day", "tag": "GEXENTRY",
+        "class": "multileg", "symbol": "SPXW",
+        "type": "credit", "price": limit_price, "duration": "day", "tag": "GEXENTRY",
         "side[0]": "sell_to_open", "quantity[0]": 1,
         "option_symbol[0]": short_syms[0] if setup['strategy']=='IC' else short_sym,
         "side[1]": "buy_to_open",  "quantity[1]": 1,
@@ -974,12 +1084,12 @@ try:
     tp_target_pct = int((1 - tp_pct) * 100)  # 50% or 70%
     if not os.path.exists(TRADE_LOG_FILE):
         with open(TRADE_LOG_FILE, 'w', newline='') as f:
-            csv.writer(f).writerow(["Timestamp_ET","Trade_ID","Strategy","Strikes","Entry_Credit",
+            csv.writer(f).writerow(["Timestamp_ET","Trade_ID","Account_ID","Strategy","Strikes","Entry_Credit",
                                   "Confidence","TP%","Exit_Time","Exit_Value","P/L_$","P/L_%","Exit_Reason","Duration_Min"])
     with open(TRADE_LOG_FILE, 'a', newline='') as f:
         csv.writer(f).writerow([
             datetime.datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S'),
-            order_id, setup['strategy'], "/".join(map(str, strikes)), f"{credit:.2f}",
+            order_id, TRADIER_ACCOUNT_ID, setup['strategy'], "/".join(map(str, strikes)), f"{credit:.2f}",
             setup['confidence'], f"{tp_target_pct}%",
             "", "", "", "", "", ""
         ])
