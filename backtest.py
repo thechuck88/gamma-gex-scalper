@@ -39,7 +39,7 @@ from core.gex_strategy import round_to_5, get_spread_width
 # From gex_scalper.py settings
 PROFIT_TARGET_HIGH = 0.50      # 50% profit for HIGH confidence
 PROFIT_TARGET_MEDIUM = 0.70    # 70% profit for MEDIUM confidence
-STOP_LOSS_PCT = 0.10           # 10% stop loss (spread increases 10%)
+STOP_LOSS_PCT = 0.15           # 15% stop loss (spread increases 15%) - MATCHES LIVE MONITOR
 VIX_MAX_THRESHOLD = 20         # Skip trading if VIX >= 20
 
 # Trailing stop settings (from gex_monitor.py)
