@@ -290,7 +290,18 @@ def get_price(symbol, use_live=False):
     headers = {"Accept": "application/json", "Authorization": f"Bearer {TRADIER_LIVE_KEY}"}
 
     try:
-        r = requests.get(url, headers=headers, params={"symbols": symbol}, timeout=10)
+        # Use retry wrapper for reliability
+        r = retry_api_call(
+            lambda: requests.get(url, headers=headers, params={"symbols": symbol}, timeout=10),
+            max_attempts=3,
+            base_delay=1.0,
+            description=f"Tradier quote for {symbol}"
+        )
+
+        # Handle retry failure
+        if r is None:
+            log(f"Tradier quote failed for {symbol}: All retry attempts exhausted")
+            return None
 
         # Validate response
         if r.status_code != 200:
@@ -426,9 +437,23 @@ def calculate_gex_pin(spx_price):
 
         today = date.today().strftime("%Y-%m-%d")
 
-        # Get options chain with greeks
-        r = requests.get(f"{LIVE_URL}/markets/options/chains", headers=LIVE_HEADERS,
-            params={"symbol": "SPX", "expiration": today, "greeks": "true"}, timeout=15)
+        # Get options chain with greeks (use retry wrapper for reliability)
+        r = retry_api_call(
+            lambda: requests.get(
+                f"{LIVE_URL}/markets/options/chains",
+                headers=LIVE_HEADERS,
+                params={"symbol": "SPX", "expiration": today, "greeks": "true"},
+                timeout=15
+            ),
+            max_attempts=3,
+            base_delay=2.0,
+            description="GEX API (options chain)"
+        )
+
+        # Handle retry failure
+        if r is None:
+            log("GEX API failed: All retry attempts exhausted")
+            return None
 
         if r.status_code != 200:
             log(f"GEX API failed: {r.status_code}")
@@ -513,7 +538,20 @@ def get_expected_credit(short_sym, long_sym):
     """Fetch expected credit from option quotes. Returns (credit, success)."""
     try:
         symbols = f"{short_sym},{long_sym}"
-        r = requests.get(f"{BASE_URL}/markets/quotes", headers=HEADERS, params={"symbols": symbols}, timeout=10)
+
+        # Use retry wrapper for reliability
+        r = retry_api_call(
+            lambda: requests.get(f"{BASE_URL}/markets/quotes", headers=HEADERS, params={"symbols": symbols}, timeout=10),
+            max_attempts=3,
+            base_delay=1.0,
+            description=f"Option quotes for {symbols}"
+        )
+
+        # Handle retry failure
+        if r is None:
+            log(f"Warning: get_expected_credit failed for {symbols}: All retry attempts exhausted")
+            return None
+
         data = r.json()
         quotes = data.get("quotes", {}).get("quote", [])
         if isinstance(quotes, dict):
