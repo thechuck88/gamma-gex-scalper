@@ -273,11 +273,19 @@ def simulate_trade_outcome(setup, entry_credit, spx_open, spx_high, spx_low, spx
     close_profit_pct = (entry_credit - value_at_close) / entry_credit if entry_credit > 0 else 0
 
     # Simulation logic with trailing stop
+    # BUG FIX (2025-12-27): Check stop loss BEFORE profit target
+    # Old logic checked TP first, converting SL hits into TP wins!
     exit_reason = None
     final_profit_pct = None
 
+    # CRITICAL: Check regular stop loss FIRST (before TP or trailing)
+    # This prevents trades that hit -15% SL from being marked as +50% TP winners
+    if worst_profit_pct <= -STOP_LOSS_PCT:
+        exit_reason = "SL (10%)"
+        final_profit_pct = -STOP_LOSS_PCT
+
     # Check if TP was hit (best profit reached TP level)
-    if best_profit_pct >= tp_pct:
+    elif best_profit_pct >= tp_pct:
         exit_reason = f"TP ({int(tp_pct*100)}%)"
         final_profit_pct = tp_pct
 
@@ -304,11 +312,6 @@ def simulate_trade_outcome(setup, entry_credit, spx_open, spx_high, spx_low, spx
             # Held to close with trailing active
             exit_reason = "Close (trail)"
             final_profit_pct = close_profit_pct
-
-    # Check regular stop loss (only if trailing not active)
-    elif worst_profit_pct <= -STOP_LOSS_PCT:
-        exit_reason = "SL (10%)"
-        final_profit_pct = -STOP_LOSS_PCT
 
     # Otherwise, held to close
     else:
@@ -482,7 +485,14 @@ def run_backtest(days=180, realistic=False):
         spx_high = row['SPX_High']
         spx_low = row['SPX_Low']
         spx_close = row['SPX_Close']
-        vix_val = row['VIX']
+
+        # BUG FIX (2025-12-27): Acknowledge VIX data limitation
+        # LIMITATION: Using daily VIX for all 5 entry times (9:36am, 10am, 11am, 12pm, 1pm)
+        # REALITY: VIX changes throughout the day. 1pm entry should use 1pm VIX, not 9:30am VIX
+        # FIX: Would need intraday VIX data (1-min bars) for accurate simulation
+        # IMPACT: Later entry times (12pm, 1pm) use stale VIX from market open
+        vix_val = row['VIX']  # Daily VIX - applies to all entry times (not realistic)
+
         ivr_val = row['IVR']
         day_name = row['day_name']
         gap_pct = row['gap_pct']
@@ -492,11 +502,16 @@ def run_backtest(days=180, realistic=False):
         opex = row['opex_week']
         rsi = row['RSI']
 
+        # BUG FIX (2025-12-27): Acknowledge pin price limitation
+        # LIMITATION: Calculating pin price ONCE per day using previous close
+        # REALITY: Pin price would be recalculated at each entry time based on real-time GEX
+        # FIX: Would need real-time GEX data or intraday pin levels
+        # IMPACT: All 5 entry times use same stale pin (up to 3.5 hours old for 1pm entry)
         # Approximate GEX pin using previous close rounded to 25
         if prev_close is None:
             pin_price = round_to_25(spx_open)
         else:
-            pin_price = round_to_25(prev_close)
+            pin_price = round_to_25(prev_close)  # Previous day's close - applies to all entry times
 
         prev_close = spx_close
 
@@ -505,10 +520,12 @@ def run_backtest(days=180, realistic=False):
             entry_time_label = ['9:36', '10:00', '11:00', '12:00', '13:00'][entry_idx]
             hours_to_expiry = 6.5 - hours_after_open  # Market closes 4pm, 6.5hrs after 9:30
 
-            # Estimate SPX price at entry time (interpolate between open and close)
-            # Simple model: price moves linearly from open toward close
-            progress = hours_after_open / 6.5
-            spx_at_entry = spx_open + (spx_close - spx_open) * progress * 0.5  # Dampened
+            # BUG FIX (2025-12-27): Use close price instead of fake interpolation
+            # OLD: Interpolated between open and close (fake smooth prices)
+            # NEW: Use close as conservative estimate (we don't have real intraday data)
+            # NOTE: This is still not perfect (we'd need 1-min intraday bars for accuracy),
+            #       but it's better than creating fake prices that never existed
+            spx_at_entry = spx_close  # Conservative: use day's close for all entry times
 
             # Get trade setup
             setup = get_gex_trade_setup(pin_price, spx_at_entry, vix_val)
