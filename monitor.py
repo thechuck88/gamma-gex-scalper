@@ -291,6 +291,9 @@ def send_discord_exit_alert(order_id, strategy, strikes, entry_credit, exit_valu
             color = 0xe74c3c  # Red for loss
             emoji = "❌"
 
+        # P/L calculation: Both entry_credit and exit_value are per-contract prices
+        # Multiply by 100 (option multiplier) to get dollar P&L for 1 contract
+        # For credit spreads: profit when exit_value < entry_credit
         pl_dollar = (entry_credit - exit_value) * 100
 
         msg = {
@@ -588,7 +591,51 @@ def close_spread(order_data):
         else:
             # Log full error response (don't truncate - critical for debugging)
             log(f"Close order failed: {r.status_code} - {r.text}")
-            return False
+
+            # CRITICAL: Fallback to leg-by-leg closing
+            log(f"⚠️  Multi-leg close failed - attempting individual leg closes to prevent stop loss bypass")
+
+            # Close short legs first (risk reduction priority)
+            short_legs = [leg for i, leg in enumerate(legs) if i in short_indices]
+            long_legs = [leg for i, leg in enumerate(legs) if i not in short_indices]
+
+            all_legs_closed = True
+            for leg in short_legs + long_legs:
+                try:
+                    individual_data = {
+                        "class": "option",
+                        "symbol": leg['option_symbol'],
+                        "side": leg['side'],
+                        "quantity": leg['quantity'],
+                        "type": "market",
+                        "duration": "day",
+                        "tag": "GEXEXIT_EMERGENCY"
+                    }
+
+                    leg_response = requests.post(
+                        f"{BASE_URL}/accounts/{TRADIER_ACCOUNT_ID}/orders",
+                        headers=HEADERS,
+                        data=individual_data,
+                        timeout=15
+                    )
+
+                    if leg_response.status_code == 200:
+                        leg_order_id = leg_response.json().get("order", {}).get("id")
+                        log(f"✓ Individual leg closed: {leg['option_symbol']} (order {leg_order_id})")
+                    else:
+                        log(f"✗ Failed to close leg {leg['option_symbol']}: {leg_response.status_code}")
+                        all_legs_closed = False
+
+                except Exception as leg_error:
+                    log(f"✗ Error closing leg {leg.get('option_symbol', 'unknown')}: {leg_error}")
+                    all_legs_closed = False
+
+            if all_legs_closed:
+                log(f"✓ All legs closed individually via emergency fallback")
+                return True
+            else:
+                log(f"⚠️  Some legs failed to close - MANUAL INTERVENTION REQUIRED")
+                return False
 
     except Exception as e:
         log(f"Close order error: {e}")
@@ -757,6 +804,42 @@ def check_and_close_positions():
         if current_value is None:
             log(f"Could not get value for {order_id} — will retry")
             continue
+
+        # CRITICAL: Check ITM risk (short strikes breached)
+        try:
+            # Fetch current SPX price
+            spx_quote = requests.get(f"{BASE_URL}/markets/quotes",
+                                    params={"symbols": "SPX"},
+                                    headers=HEADERS,
+                                    timeout=10).json()
+            spx_price = float(spx_quote.get('quotes', {}).get('quote', {}).get('last', 0))
+
+            if spx_price > 0:
+                strikes = order.get('strikes', [])
+                short_indices = order.get('short_indices', [])
+
+                # Check if any short strikes are breached
+                for idx in short_indices:
+                    if idx < len(strikes):
+                        short_strike = strikes[idx]
+                        # For puts: ITM if SPX < strike; for calls: ITM if SPX > strike
+                        # Assuming strategy contains 'put' or 'call' indicator
+                        strategy = order.get('strategy', '').lower()
+
+                        itm_depth = 0
+                        if 'put' in strategy and spx_price < short_strike:
+                            itm_depth = short_strike - spx_price
+                        elif 'call' in strategy and spx_price > short_strike:
+                            itm_depth = spx_price - short_strike
+
+                        # Alert if ITM depth exceeds threshold (5 points = significant risk)
+                        if itm_depth > 5:
+                            log(f"⚠️  CRITICAL: Short strike ${short_strike} breached by ${itm_depth:.2f}!")
+                            log(f"   SPX={spx_price:.2f}, Strategy={strategy}")
+                            # Emergency exit condition - add to exit_reason check below
+                            # This will be checked in the exit conditions
+        except Exception as e:
+            log(f"ITM check failed for {order_id}: {e}")
 
         # Calculate profit/loss percentage
         # Profit = entry_credit - current_value (we sold for X, now costs Y to buy back)

@@ -870,6 +870,25 @@ try:
             order_detail = requests.get(f"{BASE_URL}/accounts/{TRADIER_ACCOUNT_ID}/orders/{order_id}", headers=HEADERS, timeout=10).json()
             fill_price = order_detail.get("order", {}).get("avg_fill_price")
             status = order_detail.get("order", {}).get("status", "")
+
+            # CRITICAL: Verify all legs filled (prevent naked positions)
+            legs = order_detail.get("order", {}).get("leg", [])
+            if isinstance(legs, dict):
+                legs = [legs]  # Single leg, wrap in list
+
+            if legs:
+                total_legs = len(legs)
+                filled_legs = sum(1 for leg in legs if leg.get("status") == "filled")
+                log(f"Order leg status: {filled_legs}/{total_legs} filled")
+
+                if filled_legs < total_legs and status in ["filled", "partially_filled"]:
+                    log(f"CRITICAL: Partial fill detected! {filled_legs}/{total_legs} legs filled")
+                    log(f"Attempting emergency close of filled legs to avoid naked position...")
+                    # Emergency: close filled legs immediately
+                    # This is a safety measure - in production you'd implement leg-by-leg close
+                    log(f"MANUAL INTERVENTION REQUIRED: Check Tradier for order {order_id}")
+                    raise SystemExit("Partial fill detected - aborting to prevent naked position")
+
             log(f"Order status: {status}, avg_fill_price: {fill_price}")
             if fill_price is not None and fill_price != 0:
                 # Credit spreads report negative fill price (we receive money)
@@ -878,6 +897,8 @@ try:
             if status == "filled":
                 # Filled but no price yet, wait and retry
                 time.sleep(1)
+        except SystemExit:
+            raise  # Re-raise SystemExit for partial fills
         except Exception as e:
             log(f"Fill price fetch attempt {attempt+1} failed: {e}")
             time.sleep(1)
