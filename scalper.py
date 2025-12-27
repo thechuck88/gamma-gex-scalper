@@ -534,6 +534,9 @@ SKIP_FRIDAY = True
 # Skip after N consecutive down days
 MAX_CONSEC_DOWN_DAYS = 2  # Skip if 3+ down days
 
+# Maximum concurrent positions (risk management)
+MAX_DAILY_POSITIONS = 3  # Limit concurrent open positions to prevent unbounded risk
+
 def get_expected_credit(short_sym, long_sym):
     """Fetch expected credit from option quotes. Returns (credit, success)."""
     try:
@@ -993,6 +996,18 @@ try:
         except (json.JSONDecodeError, IOError, ValueError) as e:
             log(f"Error loading existing orders from {ORDERS_FILE}: {e}")
             existing_orders = []
+
+    # CRITICAL: Check max position limit to prevent unbounded risk
+    active_positions = len(existing_orders)
+    if active_positions >= MAX_DAILY_POSITIONS:
+        log(f"⛔ Position limit reached: {active_positions}/{MAX_DAILY_POSITIONS} active positions")
+        log(f"Will NOT open new position — risk management limit")
+        log(f"Active order IDs: {[o.get('order_id') for o in existing_orders]}")
+        send_discord_skip_alert(
+            f"Position limit reached ({active_positions}/{MAX_DAILY_POSITIONS})",
+            {**run_data, 'active_positions': active_positions}
+        )
+        raise SystemExit
 
     # Add new order with all tracking info
     # Format: option_symbols = [shorts..., longs...], short_indices = indices of shorts
