@@ -843,9 +843,14 @@ def check_and_close_positions():
 
         # Calculate profit/loss percentage
         # Profit = entry_credit - current_value (we sold for X, now costs Y to buy back)
+        # Use mid-price for display and profit target (optimistic)
         profit_pct = (entry_credit - current_value) / entry_credit
 
-        # Track best profit for trailing stop
+        # CRITICAL: For stop loss, use ask_value (worst-case closing cost)
+        # This prevents late stop loss triggers when bid/ask spread widens
+        profit_pct_sl = (entry_credit - ask_value) / entry_credit
+
+        # Track best profit for trailing stop (use mid-price for profit target)
         if profit_pct > best_profit_pct:
             order['best_profit_pct'] = profit_pct
             best_profit_pct = profit_pct
@@ -874,8 +879,8 @@ def check_and_close_positions():
             trailing_stop_level = best_profit_pct - trail_distance
             trailing_status = f" [TRAIL SL={trailing_stop_level*100:.0f}%]"
 
-        log(f"Order {order_id}: entry=${entry_credit:.2f} current=${current_value:.2f} "
-            f"P/L={profit_pct*100:+.1f}% (best={best_profit_pct*100:.1f}%){trailing_status}")
+        log(f"Order {order_id}: entry=${entry_credit:.2f} mid=${current_value:.2f} ask=${ask_value:.2f} "
+            f"P/L={profit_pct*100:+.1f}% (SL_PL={profit_pct_sl*100:+.1f}%, best={best_profit_pct*100:.1f}%){trailing_status}")
 
         exit_reason = None
 
@@ -899,7 +904,8 @@ def check_and_close_positions():
         # Check regular stop loss (only if trailing not active)
         # Grace period: don't trigger SL immediately, let position settle
         # Exception: emergency stop if loss exceeds 40%
-        elif not trailing_active and profit_pct <= -STOP_LOSS_PCT:
+        # CRITICAL: Use profit_pct_sl (based on ask price) for risk management
+        elif not trailing_active and profit_pct_sl <= -STOP_LOSS_PCT:
             # Calculate position age
             try:
                 entry_dt = datetime.datetime.strptime(entry_time, '%Y-%m-%d %H:%M:%S')
@@ -912,11 +918,11 @@ def check_and_close_positions():
                 position_age_sec = 9999  # If can't parse, assume old enough
 
             # Emergency stop - trigger immediately regardless of age
-            if profit_pct <= -SL_EMERGENCY_PCT:
-                exit_reason = f"EMERGENCY Stop Loss ({profit_pct*100:.0f}%)"
+            if profit_pct_sl <= -SL_EMERGENCY_PCT:
+                exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
             # Normal stop loss - only after grace period
             elif position_age_sec >= SL_GRACE_PERIOD_SEC:
-                exit_reason = f"Stop Loss ({profit_pct*100:.0f}%)"
+                exit_reason = f"Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
             else:
                 # In grace period - log but don't exit yet
                 grace_remaining = SL_GRACE_PERIOD_SEC - position_age_sec
