@@ -6,7 +6,16 @@ import sys
 print(f"[STARTUP] Scalper invoked at {__import__('datetime').datetime.now()}", flush=True)
 
 import warnings
-warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
+import logging
+
+# Security Fix (2026-01-04): Log yfinance warnings instead of ignoring
+# This helps catch API breaking changes before they cause failures
+logging.captureWarnings(True)
+yfinance_logger = logging.getLogger('py.warnings')
+yfinance_handler = logging.FileHandler('/root/gamma/data/yfinance_warnings.log')
+yfinance_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+yfinance_logger.addHandler(yfinance_handler)
+yfinance_logger.setLevel(logging.WARNING)
 
 import datetime, os, requests, json, csv, pytz, time, sys, math, fcntl
 import yfinance as yf

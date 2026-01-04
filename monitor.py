@@ -715,11 +715,18 @@ def update_trade_log(order_id, exit_value, exit_reason, entry_credit, entry_time
                 exit_time = datetime.datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S')
                 
                 # Calculate duration
+                # Security Fix (2026-01-04): Standardize timezone handling
                 try:
-                    entry_time = datetime.datetime.strptime(entry_time_str, '%Y-%m-%d %H:%M:%S')
-                    # Only localize if not already timezone-aware
-                    if entry_time.tzinfo is None:
+                    # Try ISO 8601 with timezone first (new standard format)
+                    if 'T' in entry_time_str and ('+' in entry_time_str or 'Z' in entry_time_str):
+                        entry_time = datetime.datetime.fromisoformat(entry_time_str.replace('Z', '+00:00'))
+                        # Convert to ET for duration calculation
+                        entry_time = entry_time.astimezone(ET)
+                    else:
+                        # Legacy format: assume ET timezone
+                        entry_time = datetime.datetime.strptime(entry_time_str, '%Y-%m-%d %H:%M:%S')
                         entry_time = ET.localize(entry_time)
+
                     duration_min = (datetime.datetime.now(ET) - entry_time).total_seconds() / 60
                 except (ValueError, TypeError, AttributeError) as e:
                     log(f"Error parsing entry time '{entry_time_str}': {e}")
@@ -917,11 +924,18 @@ def check_and_close_positions():
         # CRITICAL: Use profit_pct_sl (based on ask price) for risk management
         elif not trailing_active and profit_pct_sl <= -STOP_LOSS_PCT:
             # Calculate position age
+            # Security Fix (2026-01-04): Standardize timezone handling
             try:
-                entry_dt = datetime.datetime.strptime(entry_time, '%Y-%m-%d %H:%M:%S')
-                # Only localize if not already timezone-aware
-                if entry_dt.tzinfo is None:
+                # Try ISO 8601 with timezone first (new standard format)
+                if 'T' in entry_time and ('+' in entry_time or 'Z' in entry_time):
+                    entry_dt = datetime.datetime.fromisoformat(entry_time.replace('Z', '+00:00'))
+                    # Convert to ET for duration calculation
+                    entry_dt = entry_dt.astimezone(ET)
+                else:
+                    # Legacy format: assume ET timezone
+                    entry_dt = datetime.datetime.strptime(entry_time, '%Y-%m-%d %H:%M:%S')
                     entry_dt = ET.localize(entry_dt)
+
                 position_age_sec = (now - entry_dt).total_seconds()
             except (ValueError, TypeError, AttributeError) as e:
                 log(f"Error parsing entry time '{entry_time}' for SL check: {e}")
