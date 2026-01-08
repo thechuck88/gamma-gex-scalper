@@ -68,7 +68,9 @@ LOG_FILE_LIVE = "/root/gamma/data/monitor_live.log"
 # Monitor settings
 POLL_INTERVAL = 15              # Seconds between checks (tighter stop loss monitoring)
 PROFIT_TARGET_PCT = 0.50        # Close at 50% profit
-STOP_LOSS_PCT = 0.15            # Close at 15% loss (spread increases by 15%)
+STOP_LOSS_PCT = 0.10            # CRITICAL FIX-2: Changed from 0.15 to 0.10 (matches scalper logs, better R:R)
+SL_GRACE_PERIOD_SEC = 60        # HIGH FIX-1: Grace period before stop loss active (60 seconds)
+SL_EMERGENCY_PCT = 0.40         # HIGH FIX-2: Emergency stop at 40% loss (hard limit, catastrophic protection)
 AUTO_CLOSE_HOUR = 15            # Auto-close at 3:30 PM ET (was 3:50)
 AUTO_CLOSE_MINUTE = 30          # Earlier close avoids final 30-min chaos
 

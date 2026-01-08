@@ -967,10 +967,39 @@ try:
     limit_price = round(expected_credit * 0.95, 2)
     log(f"Limit order price: ${limit_price:.2f} (5% worse than mid ${expected_credit:.2f})")
 
+    # === CRITICAL FIX-1: CHECK POSITION LIMIT *BEFORE* PLACING ORDER ===
+    # This prevents orphaned positions (order live but not tracked)
+    ORDERS_FILE = "/root/gamma/data/orders_paper.json" if mode == "PAPER" else "/root/gamma/data/orders_live.json"
+
+    # Load existing orders to check position limit
+    existing_orders = []
+    if os.path.exists(ORDERS_FILE):
+        try:
+            with open(ORDERS_FILE, 'r') as f:
+                existing_orders = json.load(f)
+        except (json.JSONDecodeError, IOError, ValueError) as e:
+            log(f"Error loading existing orders from {ORDERS_FILE}: {e}")
+            existing_orders = []
+
+    # CRITICAL: Check max position limit BEFORE placing order
+    active_positions = len(existing_orders)
+    if active_positions >= MAX_DAILY_POSITIONS:
+        log(f"⛔ Position limit reached: {active_positions}/{MAX_DAILY_POSITIONS} active positions")
+        log(f"Will NOT open new position — risk management limit")
+        log(f"Active order IDs: {[o.get('order_id') for o in existing_orders]}")
+        send_discord_skip_alert(
+            f"Position limit reached ({active_positions}/{MAX_DAILY_POSITIONS})",
+            {**run_data, 'active_positions': active_positions}
+        )
+        raise SystemExit  # Exit BEFORE placing order (safe)
+
+    log(f"Position limit check passed: {active_positions}/{MAX_DAILY_POSITIONS} positions")
+
     # === REAL ENTRY ORDER ===
     entry_data = {
         "class": "multileg", "symbol": "SPXW",
         "type": "credit", "price": limit_price, "duration": "day", "tag": "GEXENTRY",
+        "option_requirement": "aon",  # CRITICAL FIX-3: All-or-None (prevents partial fills / naked positions)
         "side[0]": "sell_to_open", "quantity[0]": 1,
         "option_symbol[0]": short_syms[0] if setup['strategy']=='IC' else short_sym,
         "side[1]": "buy_to_open",  "quantity[1]": 1,
@@ -1102,29 +1131,7 @@ try:
         ])
 
     # === SAVE ORDER FOR MONITOR TRACKING ===
-    ORDERS_FILE = "/root/gamma/data/orders_paper.json" if mode == "PAPER" else "/root/gamma/data/orders_live.json"
-
-    # Load existing orders
-    existing_orders = []
-    if os.path.exists(ORDERS_FILE):
-        try:
-            with open(ORDERS_FILE, 'r') as f:
-                existing_orders = json.load(f)
-        except (json.JSONDecodeError, IOError, ValueError) as e:
-            log(f"Error loading existing orders from {ORDERS_FILE}: {e}")
-            existing_orders = []
-
-    # CRITICAL: Check max position limit to prevent unbounded risk
-    active_positions = len(existing_orders)
-    if active_positions >= MAX_DAILY_POSITIONS:
-        log(f"⛔ Position limit reached: {active_positions}/{MAX_DAILY_POSITIONS} active positions")
-        log(f"Will NOT open new position — risk management limit")
-        log(f"Active order IDs: {[o.get('order_id') for o in existing_orders]}")
-        send_discord_skip_alert(
-            f"Position limit reached ({active_positions}/{MAX_DAILY_POSITIONS})",
-            {**run_data, 'active_positions': active_positions}
-        )
-        raise SystemExit
+    # Note: existing_orders and ORDERS_FILE already loaded during position limit check above
 
     # Add new order with all tracking info
     # Format: option_symbols = [shorts..., longs...], short_indices = indices of shorts
