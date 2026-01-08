@@ -880,17 +880,6 @@ try:
         short_syms = [f"SPXW{exp_short}C{call_short_int:08d}", f"SPXW{exp_short}P{put_short_int:08d}"]
         long_syms  = [f"SPXW{exp_short}C{call_long_int:08d}",  f"SPXW{exp_short}P{put_long_int:08d}"]
         log(f"Placing IRON CONDOR: Calls {call_short}/{call_long} | Puts {put_short}/{put_long}")
-
-        # FIX #4: Check bid/ask spread quality for BOTH IC spreads
-        log("Checking call spread quality...")
-        call_spread_quality = check_spread_quality(short_syms[0], long_syms[0], call_credit)
-        log("Checking put spread quality...")
-        put_spread_quality = check_spread_quality(short_syms[1], long_syms[1], put_credit)
-
-        if not call_spread_quality or not put_spread_quality:
-            log("IC spread quality check failed — NO TRADE")
-            send_discord_skip_alert("Bid/ask spreads too wide (high slippage risk)", run_data)
-            raise SystemExit
     else:
         short_strike, long_strike = strikes
         # Validate strikes are numeric before building symbols
@@ -905,16 +894,7 @@ try:
         long_sym  = f"SPXW{exp_short}{'C' if is_call else 'P'}{long_strike_int:08d}"
         log(f"Placing {setup['strategy']} SPREAD {short_strike}/{long_strike}{'C' if is_call else 'P'}")
 
-        # FIX #4: Check bid/ask spread quality
-        log("Checking spread quality...")
-        spread_quality = check_spread_quality(short_sym, long_sym, expected_credit)
-
-        if not spread_quality:
-            log("Spread quality check failed — NO TRADE")
-            send_discord_skip_alert("Bid/ask spreads too wide (high slippage risk)", run_data)
-            raise SystemExit
-
-    # === EXPECTED CREDIT + FULL DOLLAR DISPLAY ===
+    # === EXPECTED CREDIT FETCHING (must happen BEFORE spread quality check) ===
     if setup['strategy'] == 'IC':
         # IC: Get credit for BOTH spreads (calls + puts)
         call_credit = get_expected_credit(short_syms[0], long_syms[0])
@@ -928,6 +908,24 @@ try:
         expected_credit = get_expected_credit(short_sym, long_sym)
         if expected_credit is None:
             log("ERROR: Could not get option quotes — aborting trade")
+            raise SystemExit
+
+    # === SPREAD QUALITY CHECK (now that we have expected_credit) ===
+    # FIX #4: Check bid/ask spread quality to prevent instant slippage stops
+    if setup['strategy'] == 'IC':
+        log("Checking IC spread quality...")
+        call_spread_quality = check_spread_quality(short_syms[0], long_syms[0], call_credit)
+        put_spread_quality = check_spread_quality(short_syms[1], long_syms[1], put_credit)
+        if not call_spread_quality or not put_spread_quality:
+            log("IC spread quality check failed — NO TRADE")
+            send_discord_skip_alert("Bid/ask spreads too wide (high slippage risk)", run_data)
+            raise SystemExit
+    else:
+        log("Checking spread quality...")
+        spread_quality = check_spread_quality(short_sym, long_sym, expected_credit)
+        if not spread_quality:
+            log("Spread quality check failed — NO TRADE")
+            send_discord_skip_alert("Bid/ask spreads too wide (high slippage risk)", run_data)
             raise SystemExit
 
     # FIX #3: ABSOLUTE MINIMUM CREDIT (prevents tiny premiums with no buffer)
