@@ -734,6 +734,13 @@ try:
     run_data['spx'] = spx
     run_data['vix'] = vix
 
+    # OPTIMIZATION #5: VIX Floor Filter - don't trade when volatility too low
+    VIX_FLOOR = 12.0
+    if vix < VIX_FLOOR:
+        log(f"VIX {vix:.2f} below floor ({VIX_FLOOR}) — insufficient volatility for premium")
+        send_discord_skip_alert(f"VIX {vix:.2f} below {VIX_FLOOR} floor", run_data)
+        raise SystemExit
+
     # === EXPECTED MOVE FILTER ===
     # Calculate expected 2-hour move using VIX
     # VIX = annualized volatility, convert to 2-hour expected move
@@ -937,13 +944,16 @@ try:
         raise SystemExit
 
     # === MINIMUM CREDIT CHECK (scales by time of day) ===
+    # OPTIMIZATION #2: Raised thresholds to filter low-quality trades (better risk/reward)
     # Later in day = thinner premiums = need higher minimum to justify risk
-    if now_et.hour < 12:
-        MIN_CREDIT = 1.25   # Before noon: $1.25 (raised from $0.75)
+    if now_et.hour < 11:
+        MIN_CREDIT = 1.50   # Before 11 AM: $1.50 (was $1.25)
+    elif now_et.hour < 12:
+        MIN_CREDIT = 1.75   # 11 AM-12 PM: $1.75 (new tier)
     elif now_et.hour < 13:
-        MIN_CREDIT = 1.50   # 12-1 PM: $1.50 (raised from $1.00)
+        MIN_CREDIT = 2.25   # 12-1 PM: $2.25 (was $1.50)
     else:
-        MIN_CREDIT = 2.00   # 1-2 PM: $2.00 (raised from $1.50)
+        MIN_CREDIT = 3.00   # 1-2 PM: $3.00 (was $2.00)
 
     if expected_credit < MIN_CREDIT:
         log(f"Credit ${expected_credit:.2f} below time-based minimum ${MIN_CREDIT:.2f} for {now_et.strftime('%H:%M')} ET — NO TRADE")
@@ -951,8 +961,9 @@ try:
         raise SystemExit
 
     dollar_credit = expected_credit * 100
-    # FAR OTM (MEDIUM confidence) uses 70% TP, others use 50%
-    tp_pct = 0.30 if setup['confidence'] == 'MEDIUM' else 0.50
+    # OPTIMIZATION #3: MEDIUM confidence 60% TP (was 70%) - captures profit before reversals
+    # FAR OTM (MEDIUM confidence) uses 60% TP, others use 50%
+    tp_pct = 0.40 if setup['confidence'] == 'MEDIUM' else 0.50
     tp_price = round(expected_credit * tp_pct, 2)
     sl_price = round(expected_credit * 1.10, 2)
     tp_profit = (expected_credit - tp_price) * 100

@@ -74,13 +74,13 @@ AUTO_CLOSE_MINUTE = 30          # Earlier close avoids final 30-min chaos
 
 # Trailing stop settings
 TRAILING_STOP_ENABLED = True
-TRAILING_TRIGGER_PCT = 0.25     # Activate trailing stop at 25% profit
-TRAILING_LOCK_IN_PCT = 0.10     # Lock in this much profit when trailing activates (10%)
+TRAILING_TRIGGER_PCT = 0.20     # OPTIMIZATION #4: Activate trailing stop at 20% profit (was 25%) - locks in profit earlier
+TRAILING_LOCK_IN_PCT = 0.12     # OPTIMIZATION #4: Lock in 12% profit (was 10%) - better floor when trailing activates
 TRAILING_DISTANCE_MIN = 0.08    # Minimum trail distance as profit rises (8%)
 TRAILING_TIGHTEN_RATE = 0.4     # How fast it tightens (0.4 = every 2.5% gain, trail tightens 1%)
 
 # Stop loss grace period - let positions settle before triggering SL
-SL_GRACE_PERIOD_SEC = 210       # 3.5 minutes grace period before stop loss activates
+SL_GRACE_PERIOD_SEC = 300       # OPTIMIZATION #1: 5 minutes grace (was 210s) - reduces false stop triggers
 SL_EMERGENCY_PCT = 0.40         # Emergency stop - trigger immediately if loss exceeds 40%
 
 # ============================================================================
