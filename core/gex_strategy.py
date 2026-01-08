@@ -17,6 +17,32 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 
+# ============================================================================
+# MEDIUM FIX-1: GEX Strategy Configuration (extracted magic numbers)
+# ============================================================================
+
+# Distance thresholds (pts from GEX pin)
+NEAR_PIN_MAX = 6           # 0-6pts: Iron Condor (symmetric, HIGH confidence)
+MODERATE_DISTANCE_MIN = 7  # 7-15pts: Directional spread (HIGH confidence)
+MODERATE_DISTANCE_MAX = 15
+FAR_FROM_PIN_MIN = 16      # 16-25pts: Conservative spread (MEDIUM confidence)
+FAR_FROM_PIN_MAX = 25
+TOO_FAR_MIN = 26           # >25pts: Skip (too far from pin, LOW confidence)
+
+# Strike buffer distances (pts from pin/SPX)
+IC_WING_BUFFER = 20        # Iron Condor: Distance of wings from pin
+MODERATE_PIN_BUFFER = 15   # Moderate distance: Buffer from pin
+MODERATE_SPX_BUFFER = 8    # Moderate distance: Buffer from current SPX
+FAR_PIN_BUFFER = 25        # Far distance: Buffer from pin (more conservative)
+FAR_SPX_BUFFER = 12        # Far distance: Buffer from current SPX
+
+# VIX thresholds for spread width
+VIX_LEVEL_1 = 15           # VIX < 15: Use 5pt spreads
+VIX_LEVEL_2 = 20           # VIX 15-20: Use 10pt spreads
+VIX_LEVEL_3 = 25           # VIX 20-25: Use 15pt spreads
+                           # VIX > 25: Use 20pt spreads
+
+
 @dataclass
 class GEXTradeSetup:
     """Result of GEX trade setup analysis"""
@@ -40,11 +66,11 @@ def get_spread_width(vix: float) -> int:
     Determine spread width based on VIX level.
     Higher VIX = wider spreads for safety.
     """
-    if vix < 15:
+    if vix < VIX_LEVEL_1:
         return 5
-    elif vix < 20:
+    elif vix < VIX_LEVEL_2:
         return 10
-    elif vix < 25:
+    elif vix < VIX_LEVEL_3:
         return 15
     else:
         return 20
@@ -87,8 +113,8 @@ def get_gex_trade_setup(pin_price: float, spx_price: float, vix: float,
         )
 
     # === NEAR PIN (0-6 pts): Iron Condor (symmetric wings) ===
-    if abs_distance <= 6:
-        ic_buffer = 20
+    if abs_distance <= NEAR_PIN_MAX:
+        ic_buffer = IC_WING_BUFFER
         call_short = round_to_5(pin_price + ic_buffer)
         call_long = round_to_5(call_short + spread_width)
         put_short = round_to_5(pin_price - ic_buffer)
@@ -106,9 +132,9 @@ def get_gex_trade_setup(pin_price: float, spx_price: float, vix: float,
         )
 
     # === MODERATE DISTANCE (7-15 pts): Directional spread (HIGH confidence) ===
-    elif 7 <= abs_distance <= 15:
-        pin_buffer = 15
-        spx_buffer = 8
+    elif MODERATE_DISTANCE_MIN <= abs_distance <= MODERATE_DISTANCE_MAX:
+        pin_buffer = MODERATE_PIN_BUFFER
+        spx_buffer = MODERATE_SPX_BUFFER
 
         if distance > 0:  # SPX ABOVE pin → expect pullback → CALL spread
             pin_based = pin_price + pin_buffer
@@ -144,9 +170,9 @@ def get_gex_trade_setup(pin_price: float, spx_price: float, vix: float,
             )
 
     # === FAR FROM PIN (16-25 pts): Conservative spread (MEDIUM confidence) ===
-    elif 16 <= abs_distance <= 25:
-        pin_buffer = 25
-        spx_buffer = 12
+    elif FAR_FROM_PIN_MIN <= abs_distance <= FAR_FROM_PIN_MAX:
+        pin_buffer = FAR_PIN_BUFFER
+        spx_buffer = FAR_SPX_BUFFER
 
         if distance > 0:  # SPX ABOVE pin → CALL spread
             pin_based = pin_price + pin_buffer
