@@ -1,0 +1,155 @@
+backtest_multi_index.py:255: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  etf = yf.download(config['etf_proxy'], start=start_date, end=end_date, progress=False)
+backtest_multi_index.py:256: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  vix = yf.download("^VIX", start=start_date, end=end_date, progress=False)
+backtest_multi_index.py:255: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  etf = yf.download(config['etf_proxy'], start=start_date, end=end_date, progress=False)
+backtest_multi_index.py:256: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  vix = yf.download("^VIX", start=start_date, end=end_date, progress=False)
+backtest_multi_index.py:255: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  etf = yf.download(config['etf_proxy'], start=start_date, end=end_date, progress=False)
+backtest_multi_index.py:256: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  vix = yf.download("^VIX", start=start_date, end=end_date, progress=False)
+backtest_multi_index.py:255: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  etf = yf.download(config['etf_proxy'], start=start_date, end=end_date, progress=False)
+backtest_multi_index.py:256: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  vix = yf.download("^VIX", start=start_date, end=end_date, progress=False)
+
+======================================================================
+MULTI-INDEX COMPARISON BACKTEST
+Testing GEX scalper strategy across 4 indices
+Period: 252 trading days (~1 year)
+======================================================================
+
+======================================================================
+BACKTESTING: S&P 500 (SPX)
+ETF Proxy: SPY
+Period: Last 252 trading days
+======================================================================
+Fetching historical data...
+Loaded 209 trading days
+Date range: 2025-03-13 to 2026-01-09
+SPX range: 4921 - 6940
+VIX range: 13.5 - 52.3
+
+Running simulation...
+
+----------------------------------------------------------------------
+RESULTS - S&P 500 (SPX)
+----------------------------------------------------------------------
+Total Trades:     1029
+Winners:          934 (90.8%)
+Losers:           95
+Total P/L:        $85,551.48
+ROI:              +342.2%
+Avg Winner:       $111.74
+Avg Loser:        $-198.07
+Profit Factor:    5.55
+----------------------------------------------------------------------
+
+======================================================================
+BACKTESTING: Nasdaq-100 (NDX)
+ETF Proxy: QQQ
+Period: Last 252 trading days
+======================================================================
+Fetching historical data...
+Loaded 209 trading days
+Date range: 2025-03-13 to 2026-01-09
+NDX range: 17619 - 26985
+VIX range: 13.5 - 52.3
+
+Running simulation...
+
+----------------------------------------------------------------------
+RESULTS - Nasdaq-100 (NDX)
+----------------------------------------------------------------------
+Total Trades:     1029
+Winners:          901 (87.6%)
+Losers:           128
+Total P/L:        $265,087.26
+ROI:              +1060.3%
+Avg Winner:       $325.64
+Avg Loser:        $-221.23
+Profit Factor:    10.36
+----------------------------------------------------------------------
+
+======================================================================
+BACKTESTING: Russell 2000 (RUT)
+ETF Proxy: IWM
+Period: Last 252 trading days
+======================================================================
+Fetching historical data...
+Loaded 209 trading days
+Date range: 2025-03-13 to 2026-01-09
+RUT range: 1732 - 2602
+VIX range: 13.5 - 52.3
+
+Running simulation...
+
+----------------------------------------------------------------------
+RESULTS - Russell 2000 (RUT)
+----------------------------------------------------------------------
+Total Trades:     1029
+Winners:          906 (88.0%)
+Losers:           123
+Total P/L:        $77,163.56
+ROI:              +308.7%
+Avg Winner:       $110.68
+Avg Loser:        $-187.92
+Profit Factor:    4.34
+----------------------------------------------------------------------
+
+======================================================================
+BACKTESTING: Dow Jones (DJX)
+ETF Proxy: DIA
+Period: Last 252 trading days
+======================================================================
+Fetching historical data...
+Loaded 209 trading days
+Date range: 2025-03-13 to 2026-01-09
+DJX range: 372 - 495
+VIX range: 13.5 - 52.3
+
+Running simulation...
+
+----------------------------------------------------------------------
+RESULTS - Dow Jones (DJX)
+----------------------------------------------------------------------
+Total Trades:     0
+Winners:          0 (0.0%)
+Losers:           0
+Total P/L:        $0.00
+ROI:              +0.0%
+Avg Winner:       $0.00
+Avg Loser:        $0.00
+Profit Factor:    0.00
+----------------------------------------------------------------------
+
+======================================================================
+COMPARISON SUMMARY
+======================================================================
+
+Index      Name                 Trades     Win Rate     Total P/L       ROI        PF      
+------------------------------------------------------------------------------------------
+SPX        S&P 500              1029         90.8%     $ 85,551.48    342.2%     5.55
+NDX        Nasdaq-100           1029         87.6%     $265,087.26   1060.3%    10.36
+RUT        Russell 2000         1029         88.0%     $ 77,163.56    308.7%     4.34
+DJX        Dow Jones            0             0.0%     $      0.00      0.0%     0.00
+
+======================================================================
+RANKING BY ROI
+======================================================================
+1. 🥇 NDX (Nasdaq-100): +1060.3% ROI, $265,087 profit
+2. 🥈 SPX (S&P 500): +342.2% ROI, $85,551 profit
+3. 🥉 RUT (Russell 2000): +308.7% ROI, $77,164 profit
+4.  DJX (Dow Jones): +0.0% ROI, $0 profit
+
+======================================================================
+RANKING BY PROFIT FACTOR
+======================================================================
+1. 🥇 NDX (Nasdaq-100): 10.36 PF, 87.6% WR
+2. 🥈 SPX (S&P 500): 5.55 PF, 90.8% WR
+3. 🥉 RUT (Russell 2000): 4.34 PF, 88.0% WR
+4.  DJX (Dow Jones): 0.00 PF, 0.0% WR
+
+Detailed results saved to: /root/gamma/multi_index_comparison.csv
