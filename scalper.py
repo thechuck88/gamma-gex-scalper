@@ -1238,6 +1238,20 @@ try:
         option_symbols = [short_sym, long_sym]
         short_indices = [0]  # First one is short
 
+    # Calculate entry distance (OTM distance at entry) for progressive hold strategy
+    if setup['strategy'] == 'CALL':
+        # CALL spread: short strike is lower, we profit if SPX stays below
+        entry_distance = min(strikes) - spx
+    elif setup['strategy'] == 'PUT':
+        # PUT spread: short strike is higher, we profit if SPX stays above
+        entry_distance = spx - max(strikes)
+    else:  # IC
+        # Iron condor: distance to nearest short strike
+        strikes_sorted = sorted(strikes)
+        call_short = strikes_sorted[1]  # Second strike (call short)
+        put_short = strikes_sorted[2]   # Third strike (put short)
+        entry_distance = min(spx - put_short, call_short - spx)
+
     order_data = {
         "order_id": order_id,
         "entry_credit": credit,
@@ -1251,7 +1265,10 @@ try:
         "tp_price": tp_price,
         "sl_price": sl_price,
         "trailing_stop_active": False,
-        "best_profit_pct": 0
+        "best_profit_pct": 0,
+        "entry_distance": entry_distance,
+        "spx_entry": spx,
+        "vix_entry": vix
     }
     existing_orders.append(order_data)
 

@@ -27,6 +27,7 @@ import json
 import csv
 import requests
 import pytz
+import numpy as np
 
 # ============================================================================
 #                              CONFIGURATION
@@ -82,6 +83,22 @@ TRAILING_TIGHTEN_RATE = 0.4     # How fast it tightens (0.4 = every 2.5% gain, t
 # Stop loss grace period - let positions settle before triggering SL
 SL_GRACE_PERIOD_SEC = 300       # OPTIMIZATION #1: 5 minutes grace (was 210s) - reduces false stop triggers
 SL_EMERGENCY_PCT = 0.40         # Emergency stop - trigger immediately if loss exceeds 40%
+
+# Progressive hold-to-expiration settings (2026-01-10)
+PROGRESSIVE_HOLD_ENABLED = True   # Enable progressive hold strategy
+HOLD_PROFIT_THRESHOLD = 0.80      # Must reach 80% profit to qualify for hold
+HOLD_VIX_MAX = 17                 # VIX must be < 17
+HOLD_MIN_TIME_LEFT_HOURS = 1.0    # At least 1 hour to expiration
+HOLD_MIN_ENTRY_DISTANCE = 8       # At least 8 pts OTM at entry
+
+# Progressive TP schedule: (hours_after_entry, tp_threshold)
+PROGRESSIVE_TP_SCHEDULE = [
+    (0.0, 0.50),   # Start: 50% TP
+    (1.0, 0.55),   # 1 hour: 55% TP
+    (2.0, 0.60),   # 2 hours: 60% TP
+    (3.0, 0.70),   # 3 hours: 70% TP
+    (4.0, 0.80),   # 4+ hours: 80% TP
+]
 
 # ============================================================================
 #                           MODE DETECTION
@@ -896,23 +913,86 @@ def check_and_close_positions():
             trailing_stop_level = best_profit_pct - trail_distance
             trailing_status = f" [TRAIL SL={trailing_stop_level*100:.0f}%]"
 
+        # Calculate progressive TP threshold based on time elapsed
+        progressive_tp_pct = PROFIT_TARGET_PCT  # Default to 50%
+        hold_qualified = False
+
+        if PROGRESSIVE_HOLD_ENABLED:
+            try:
+                # Parse entry time to calculate time elapsed
+                if 'T' in entry_time and ('+' in entry_time or 'Z' in entry_time):
+                    entry_dt = datetime.datetime.fromisoformat(entry_time.replace('Z', '+00:00'))
+                    entry_dt = entry_dt.astimezone(ET)
+                else:
+                    entry_dt = datetime.datetime.strptime(entry_time, '%Y-%m-%d %H:%M:%S')
+                    entry_dt = ET.localize(entry_dt)
+
+                hours_elapsed = (now - entry_dt).total_seconds() / 3600.0
+
+                # Interpolate progressive TP threshold
+                schedule_times = [t for t, _ in PROGRESSIVE_TP_SCHEDULE]
+                schedule_tps = [tp for _, tp in PROGRESSIVE_TP_SCHEDULE]
+                progressive_tp_pct = np.interp(hours_elapsed, schedule_times, schedule_tps)
+
+                # Check hold qualification if profit reached 80%
+                if profit_pct >= HOLD_PROFIT_THRESHOLD:
+                    # Get current VIX
+                    try:
+                        vix_quote = requests.get(f"{BASE_URL}/markets/quotes",
+                                               params={"symbols": "$VIX.X"},
+                                               headers=HEADERS,
+                                               timeout=10).json()
+                        current_vix = float(vix_quote.get('quotes', {}).get('quote', {}).get('last', 99))
+                    except:
+                        current_vix = 99  # If can't fetch, assume high VIX (don't hold)
+
+                    # Calculate time left to expiration (assume 4 PM expiration)
+                    expiry_time = now.replace(hour=16, minute=0, second=0, microsecond=0)
+                    hours_to_expiry = (expiry_time - now).total_seconds() / 3600.0
+
+                    # Get entry distance from order (calculated at entry)
+                    entry_distance = order.get('entry_distance', 0)
+
+                    # Check all hold qualification rules
+                    if (current_vix < HOLD_VIX_MAX and
+                        hours_to_expiry >= HOLD_MIN_TIME_LEFT_HOURS and
+                        entry_distance >= HOLD_MIN_ENTRY_DISTANCE):
+
+                        hold_qualified = True
+                        order['hold_to_expiry'] = True
+                        orders_modified = True
+                        log(f"🎯 HOLD-TO-EXPIRY QUALIFIED: {order_id} (VIX={current_vix:.1f}, hrs_left={hours_to_expiry:.1f}h, dist={entry_distance:.0f}pts)")
+
+            except Exception as e:
+                log(f"Error calculating progressive TP for {order_id}: {e}")
+                progressive_tp_pct = PROFIT_TARGET_PCT
+
+        # Check if position is marked for hold-to-expiry
+        is_holding = order.get('hold_to_expiry', False)
+        hold_status = " [HOLD]" if is_holding else ""
+
         log(f"Order {order_id}: entry=${entry_credit:.2f} mid=${current_value:.2f} ask=${ask_value:.2f} "
-            f"P/L={profit_pct*100:+.1f}% (SL_PL={profit_pct_sl*100:+.1f}%, best={best_profit_pct*100:.1f}%){trailing_status}")
+            f"P/L={profit_pct*100:+.1f}% (SL_PL={profit_pct_sl*100:+.1f}%, best={best_profit_pct*100:.1f}%) "
+            f"TP={progressive_tp_pct*100:.0f}%{trailing_status}{hold_status}")
 
         exit_reason = None
 
         # Check time-based auto-close (3:50 PM for 0DTE)
-        if now.hour == AUTO_CLOSE_HOUR and now.minute >= AUTO_CLOSE_MINUTE:
+        # BUT: Skip auto-close for positions marked for hold-to-expiry
+        if now.hour == AUTO_CLOSE_HOUR and now.minute >= AUTO_CLOSE_MINUTE and not is_holding:
             exit_reason = "Auto-close 3:50 PM (0DTE)"
 
         # Check after 4 PM — assume expired worthless if still open
         elif now.hour >= 16:
             current_value = 0.0
-            exit_reason = "0DTE Expiration"
+            if is_holding:
+                exit_reason = "Hold-to-Expiry: Worthless"
+            else:
+                exit_reason = "0DTE Expiration"
 
-        # Check profit target
-        elif profit_pct >= PROFIT_TARGET_PCT:
-            exit_reason = f"Profit Target ({profit_pct*100:.0f}%)"
+        # Check profit target (use progressive threshold)
+        elif profit_pct >= progressive_tp_pct and not is_holding:
+            exit_reason = f"Profit Target ({progressive_tp_pct*100:.0f}%)"
 
         # Check trailing stop - if activated and profit drops below trailing level
         elif trailing_active and trailing_stop_level is not None and profit_pct <= trailing_stop_level:
@@ -983,6 +1063,12 @@ def print_startup_banner():
         trailing_info = f"Trailing stop: ON (at {int(TRAILING_TRIGGER_PCT*100)}% locks {int(TRAILING_LOCK_IN_PCT*100)}%, trails to {int(TRAILING_DISTANCE_MIN*100)}% behind)"
     else:
         trailing_info = "Trailing stop: OFF"
+
+    if PROGRESSIVE_HOLD_ENABLED:
+        progressive_info = f"Progressive hold: ON (80% profit + VIX<{HOLD_VIX_MAX} + {HOLD_MIN_TIME_LEFT_HOURS}h left + {HOLD_MIN_ENTRY_DISTANCE}pts OTM)"
+    else:
+        progressive_info = "Progressive hold: OFF"
+
     banner = [
         "=" * 70,
         f"GEX POSITION MONITOR — {'LIVE' if MODE == 'REAL' else 'PAPER'} MODE",
@@ -990,9 +1076,10 @@ def print_startup_banner():
         f"Orders file: {ORDERS_FILE}",
         f"Log file: {LOG_FILE}",
         f"Poll interval: {POLL_INTERVAL}s",
-        f"Profit target: {PROFIT_TARGET_PCT*100:.0f}%",
+        f"Profit target: {PROFIT_TARGET_PCT*100:.0f}% (progressive TP schedule)",
         f"Stop loss: {STOP_LOSS_PCT*100:.0f}% (after {SL_GRACE_PERIOD_SEC}s grace, emergency at {SL_EMERGENCY_PCT*100:.0f}%)",
         trailing_info,
+        progressive_info,
         f"Auto-close: {AUTO_CLOSE_HOUR}:{AUTO_CLOSE_MINUTE:02d} ET",
         "=" * 70
     ]
