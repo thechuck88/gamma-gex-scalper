@@ -1,0 +1,315 @@
+======================================================================
+NDX GEX SCALPER BACKTEST
+Period: Last 1260 trading days
+MODE: REALISTIC (slippage, 10% SL hits, 2% gap risk, limit order fills)
+======================================================================
+
+Fetching historical data...
+Loaded 1298 trading days
+Date range: 2020-11-09 to 2026-01-09
+NDX range: 10589 - 27038
+VIX range: 11.9 - 52.3
+IVR range: 0 - 100
+
+Running simulation...
+Entry times: 9:36 AM, 10:00 AM, 11:00 AM, 12:00 PM
+Filters: VIX < 20, 2 PM cutoff, min credit $1.00
+Excluding: FOMC days, short trading days
+
+🔢 AUTO-SCALING ENABLED:
+  Starting Capital: $25,000
+  Position Sizing: Half-Kelly (rolling stats)
+  Max Contracts: 10
+  Stop Loss/Contract: $150
+
+Days skipped: FOMC=16, Short=6, VIX>=20: 3122 entry attempts
+
+----------------------------------------
+APPLYING REALISTIC ADJUSTMENTS:
+----------------------------------------
+  1) Slippage & commissions: -$27,290 total
+  2) Stop loss hits: 502 trades (10%) → -$298,342
+  3) Gap/assignment risk: 86 trades (2%) → -$78,355
+----------------------------------------
+
+======================================================================
+BACKTEST RESULTS
+======================================================================
+
+Total Trades:     4749
+Winners:          2437 (51.3%)
+Losers:           2312 (48.7%)
+
+Starting Capital: $25,000
+Final Balance:    $15,677,338
+Total Return:     +62609.4%
+Total P/L:        $+15,652,338.30
+
+Avg Position Size: 10.0 contracts
+Max Position Size: 10 contracts
+Avg Winner (per contract): $+810.28
+Avg Loser (per contract):  $-177.08
+Profit Factor:    4.82
+
+----------------------------------------
+TRAILING STOP ANALYSIS:
+----------------------------------------
+SL (10%)              Count: 1667  P/L: $-197,398.48
+Hold: Worthless       Count: 1367  P/L: $+1,204,377.79
+TP (80%)              Count: 741  P/L: $+538,237.41
+SL (realistic)        Count: 502  P/L: $-75,300.00
+Hold: Near ATM        Count: 221  P/L: $+163,769.98
+TP (75%)              Count: 108  P/L: $+68,256.15
+Gap (realistic)       Count:  86  P/L: $-43,000.00
+Hold: ITM             Count:  57  P/L: $-93,709.02
+
+Trailing Activated: 4749 trades (100.0%)
+  Total P/L: $+1,565,233.83  Avg: $+329.59
+
+Peak profit reached:
+  >= 25%: 4749 trades (100.0%)
+  >= 35%: 4749 trades (100.0%)
+  >= 45%: 4749 trades (100.0%)
+
+----------------------------------------
+BY STRATEGY TYPE:
+----------------------------------------
+CALL      Trades: 2520  WR:  65.6%  P/L: $+1,109,411.72
+IC        Trades: 709  WR:  19.2%  P/L: $+98,845.29
+PUT       Trades: 1520  WR:  42.6%  P/L: $+356,976.82
+
+----------------------------------------
+BY CONFIDENCE LEVEL:
+----------------------------------------
+HIGH      Trades: 4040  WR:  57.0%  P/L: $+1,466,388.54
+MEDIUM    Trades: 709  WR:  19.2%  P/L: $+98,845.29
+
+----------------------------------------
+BY ENTRY TIME:
+----------------------------------------
+9:36      Trades: 708  WR:  52.0%  P/L: $+252,823.40
+10:00     Trades: 714  WR:  52.9%  P/L: $+256,804.16
+11:00     Trades: 674  WR:  50.4%  P/L: $+217,124.13
+12:00     Trades: 667  WR:  49.6%  P/L: $+195,340.86
+
+----------------------------------------
+BY IVR (Implied Volatility Rank):
+----------------------------------------
+0-20 (Low)       Trades: 3964  WR:  52.6%  P/L: $+1,375,324.12  Avg Credit: $9.71
+20-40            Trades: 672  WR:  45.7%  P/L: $+164,862.30  Avg Credit: $10.41
+40-60 (Mid)      Trades:  67  WR:  32.8%  P/L: $+11,622.30  Avg Credit: $8.97
+60-80            Trades:  46  WR:  50.0%  P/L: $+13,425.11  Avg Credit: $10.52
+80-100 (High)    Trades:   0
+
+----------------------------------------
+BY DAY OF WEEK:
+----------------------------------------
+Monday        Trades: 927  WR:  53.9%  P/L: $+341,785.37
+Tuesday       Trades: 1004  WR:  50.1%  P/L: $+310,810.37
+Wednesday     Trades: 925  WR:  47.4%  P/L: $+284,198.67
+Thursday      Trades: 932  WR:  50.2%  P/L: $+283,722.41
+Friday        Trades: 961  WR:  54.9%  P/L: $+344,717.01
+
+----------------------------------------
+BY GAP SIZE (open vs prev close):
+----------------------------------------
+< 0.25%       Trades: 1896  WR:  56.8%  P/L: $+759,511.16
+0.25-0.5%     Trades: 1226  WR:  52.9%  P/L: $+402,292.69
+0.5-1.0%      Trades: 1186  WR:  44.6%  P/L: $+299,109.63
+> 1.0%        Trades: 441  WR:  41.5%  P/L: $+104,320.35
+
+----------------------------------------
+BY TREND (SPX vs 20-day SMA):
+----------------------------------------
+Above SMA20   Trades: 3810  WR:  52.1%  P/L: $+1,298,932.69
+Below SMA20   Trades: 939  WR:  48.1%  P/L: $+266,301.14
+
+----------------------------------------
+BY PREV DAY RANGE (vs 10-day avg):
+----------------------------------------
+Low (<0.8x)      Trades: 1655  WR:  51.7%  P/L: $+561,911.51
+Normal           Trades: 1891  WR:  52.4%  P/L: $+639,523.56
+High (>1.2x)     Trades: 1203  WR:  49.0%  P/L: $+363,798.76
+
+----------------------------------------
+BY CONSECUTIVE UP/DOWN DAYS (prev):
+----------------------------------------
+3+ down       Trades: 333  WR:  45.6%  P/L: $+83,537.63
+1-2 down      Trades: 1563  WR:  51.1%  P/L: $+492,849.15
+1-2 up        Trades: 1815  WR:  49.9%  P/L: $+560,475.60
+3+ up         Trades: 1032  WR:  55.7%  P/L: $+420,181.30
+
+----------------------------------------
+BY OPEX WEEK (monthly options exp):
+----------------------------------------
+OPEX week     Trades: 1035  WR:  50.5%  P/L: $+324,384.48
+Non-OPEX      Trades: 3714  WR:  51.5%  P/L: $+1,240,849.35
+
+----------------------------------------
+BY RSI (14-period):
+----------------------------------------
+< 30 (Oversold)     Trades:  83  WR:  41.0%  P/L: $+17,384.75
+30-40               Trades: 331  WR:  53.8%  P/L: $+101,933.89
+40-50               Trades: 600  WR:  44.3%  P/L: $+157,748.13
+50-60               Trades: 1060  WR:  50.6%  P/L: $+348,962.66
+60-70               Trades: 1232  WR:  51.8%  P/L: $+404,168.59
+> 70 (Overbought)   Trades: 1443  WR:  54.4%  P/L: $+535,035.81
+
+----------------------------------------
+MONTHLY BREAKDOWN:
+----------------------------------------
+2021-02  Trades:   5  WR: 100.0%  P/L: $+3,515.71
+2021-03  Trades:  41  WR:   9.8%  P/L: $-2,689.59
+2021-04  Trades: 116  WR:  73.3%  P/L: $+57,967.09
+2021-05  Trades:  70  WR:  65.7%  P/L: $+25,099.37
+2021-06  Trades: 126  WR:  63.5%  P/L: $+58,026.84
+2021-07  Trades: 120  WR:  45.0%  P/L: $+37,623.88
+2021-08  Trades: 119  WR:  66.4%  P/L: $+68,151.62
+2021-09  Trades:  77  WR:  49.4%  P/L: $+25,146.03
+2021-10  Trades:  94  WR:  62.8%  P/L: $+40,632.82
+2021-11  Trades:  96  WR:  59.4%  P/L: $+42,601.39
+2021-12  Trades:  54  WR:  75.9%  P/L: $+26,346.95
+2022-01  Trades:  50  WR:  36.0%  P/L: $+8,702.93
+2022-02  Trades:   6  WR: 100.0%  P/L: $+4,140.60
+2022-03  Trades:  16  WR:  81.2%  P/L: $+8,360.07
+2022-04  Trades:  10  WR:  40.0%  P/L: $+1,966.66
+2022-08  Trades:  34  WR:  67.6%  P/L: $+13,982.39
+2022-12  Trades:  11  WR:   0.0%  P/L: $-1,674.09
+2023-01  Trades:  56  WR:  62.5%  P/L: $+19,395.60
+2023-02  Trades:  42  WR:  59.5%  P/L: $+13,359.17
+2023-03  Trades:  54  WR:  66.7%  P/L: $+21,315.03
+2023-04  Trades: 115  WR:  34.8%  P/L: $+12,696.19
+2023-05  Trades: 123  WR:  69.1%  P/L: $+57,081.22
+2023-06  Trades: 127  WR:  54.3%  P/L: $+37,638.99
+2023-07  Trades: 132  WR:  50.0%  P/L: $+38,384.74
+2023-08  Trades: 140  WR:  52.9%  P/L: $+41,616.05
+2023-09  Trades: 125  WR:  44.8%  P/L: $+34,650.48
+2023-10  Trades:  92  WR:  58.7%  P/L: $+31,354.33
+2023-11  Trades: 137  WR:  49.6%  P/L: $+48,194.67
+2023-12  Trades: 131  WR:  64.9%  P/L: $+58,714.89
+2024-01  Trades: 128  WR:  46.1%  P/L: $+31,665.92
+2024-02  Trades: 132  WR:  59.8%  P/L: $+51,460.54
+2024-03  Trades: 123  WR:  50.4%  P/L: $+46,459.63
+2024-04  Trades: 130  WR:  40.8%  P/L: $+26,437.93
+2024-05  Trades: 139  WR:  59.7%  P/L: $+54,367.06
+2024-06  Trades: 116  WR:  52.6%  P/L: $+38,539.89
+2024-07  Trades: 129  WR:  47.3%  P/L: $+38,128.73
+2024-08  Trades:  79  WR:  43.0%  P/L: $+23,211.71
+2024-09  Trades:  92  WR:  44.6%  P/L: $+26,535.26
+2024-10  Trades:  81  WR:  37.0%  P/L: $+13,275.87
+2024-11  Trades:  96  WR:  36.5%  P/L: $+21,508.13
+2024-12  Trades: 113  WR:  63.7%  P/L: $+53,175.71
+2025-01  Trades: 107  WR:  27.1%  P/L: $+14,019.86
+backtest_ndx.py:598: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  qqq = yf.download("QQQ", start=start_date, end=end_date, progress=False)
+backtest_ndx.py:599: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  vix = yf.download("^VIX", start=start_date, end=end_date, progress=False)
+2025-02  Trades: 108  WR:  50.0%  P/L: $+33,845.52
+2025-03  Trades:  36  WR:  63.9%  P/L: $+16,079.76
+2025-05  Trades:  60  WR:  43.3%  P/L: $+15,199.70
+2025-06  Trades:  84  WR:  54.8%  P/L: $+30,957.49
+2025-07  Trades: 108  WR:  37.0%  P/L: $+25,105.05
+2025-08  Trades: 118  WR:  45.8%  P/L: $+33,654.52
+2025-09  Trades: 127  WR:  46.5%  P/L: $+50,095.05
+2025-10  Trades: 105  WR:  58.1%  P/L: $+48,811.91
+2025-11  Trades:  54  WR:  27.8%  P/L: $+6,350.42
+2025-12  Trades: 126  WR:  38.1%  P/L: $+35,051.16
+2026-01  Trades:  39  WR:  17.9%  P/L: $-1,005.02
+
+----------------------------------------
+RISK METRICS:
+----------------------------------------
+Profit Factor:    4.82
+Sortino Ratio:    6.48
+Max Drawdown:     $-6,709.55
+Peak Equity:      $1,568,185.51
+Final Equity:     $1,565,233.83
+Avg Daily P/L:    $1,976.31
+Losing Days:      316
+
+Detailed results saved to: /root/gamma/data/backtest_ndx_results.csv
+
+----------------------------------------
+LAST 10 TRADES:
+----------------------------------------
+      date entry_time  vix strategy     strikes  entry_credit     exit_reason  pnl_dollars
+2026-01-08      11:00 15.4      PUT 26325/26300          9.85        SL (10%)      -103.47
+2026-01-08      11:30 15.4      PUT 26325/26300          9.72        SL (10%)      -102.21
+2026-01-08      12:30 15.4      PUT 26325/26300          9.39        SL (10%)       -98.93
+2026-01-09       9:36 14.5     CALL 26675/26700         10.42  SL (realistic)      -150.00
+2026-01-09      10:00 14.5     CALL 26675/26700         10.34 Hold: Worthless      1029.00
+2026-01-09      10:30 14.5     CALL 26675/26700         10.23       Hold: ITM     -1481.80
+2026-01-09      11:00 14.5     CALL 26675/26700         10.11  SL (realistic)      -150.00
+2026-01-09      11:30 14.5     CALL 26675/26700          9.97 Hold: Worthless       991.77
+2026-01-09      12:00 14.5     CALL 26675/26700          9.80  SL (realistic)      -150.00
+2026-01-09      12:30 14.5     CALL 26675/26700          9.60 Hold: Worthless       955.41
+
+======================================================================
+BACKTEST COMPLETE
+======================================================================
+
+======================================================================
+MONTE CARLO SIMULATION (10,000 runs, 252 trading days)
+MODE: AUTO-SCALING (Half-Kelly position sizing)
+======================================================================
+
+Input: 4749 historical trades
+Avg trades/day: 6.0
+Trade P/L range (per contract): $-1904 to $2009
+Trade P/L mean: $329.59, std: $542.96
+
+Auto-scaling settings:
+  Starting capital: $25,000
+  Max contracts: 10
+  Position sizing: Half-Kelly (rolling)
+
+--------------------------------------------------
+PROJECTED 252-DAY P/L DISTRIBUTION:
+--------------------------------------------------
+    5th percentile: $ 4,509,659
+   10th percentile: $ 4,652,461
+   25th percentile: $ 4,817,313
+   50th percentile: $ 4,969,271
+   75th percentile: $ 5,111,722
+   90th percentile: $ 5,244,960
+   95th percentile: $ 5,328,096
+
+  Mean:             $ 4,785,085
+  Std Dev:          $   985,437
+
+--------------------------------------------------
+MAX DRAWDOWN DISTRIBUTION:
+--------------------------------------------------
+    5th percentile: $   -44,725
+   10th percentile: $   -40,745
+   25th percentile: $   -36,107
+   50th percentile: $   -30,214
+  Worst case (5%):  $   -44,725
+
+--------------------------------------------------
+WIN RATE DISTRIBUTION:
+--------------------------------------------------
+  5th percentile:     49.2%
+  Median:             51.3%
+  95th percentile:    53.4%
+
+--------------------------------------------------
+PROBABILITY OF OUTCOMES (Final Account Balance):
+--------------------------------------------------
+  P(Loss):             3.9%
+  P(> $50K):          96.1%
+  P(> $100K):         96.1%
+  P(> $250K):         96.1%
+  P(> $500K):         96.1%
+  P(> $1M):           96.1%
+
+--------------------------------------------------
+RISK-ADJUSTED METRICS (from simulations):
+--------------------------------------------------
+  Sortino 10th pct:   2.25
+  Sortino median:     2.98
+  Sortino 90th pct:   4.27
+
+======================================================================
+MONTE CARLO COMPLETE
+======================================================================
