@@ -536,15 +536,15 @@ def calculate_gex_pin(spx_price):
         log(f"GEX calculation error: {e}")
         return None
 
-# RSI filter range
-RSI_MIN = 50
-RSI_MAX = 70
+# RSI filter range (FIX 2026-01-10: Widened from 50-70 to 30-80 for more opportunities)
+RSI_MIN = 30  # Was 50 (too restrictive)
+RSI_MAX = 80  # Was 70 (too restrictive)
 
 # Skip Fridays (day 4 = Friday)
 SKIP_FRIDAY = True
 
-# Skip after N consecutive down days
-MAX_CONSEC_DOWN_DAYS = 2  # Skip if 3+ down days
+# Skip after N consecutive down days (FIX 2026-01-10: Increased from 2 to 5)
+MAX_CONSEC_DOWN_DAYS = 5  # Skip if 6+ down days (was 2 - too conservative)
 
 # Maximum concurrent positions (risk management)
 MAX_DAILY_POSITIONS = 3  # Limit concurrent open positions to prevent unbounded risk
@@ -944,16 +944,14 @@ try:
         raise SystemExit
 
     # === MINIMUM CREDIT CHECK (scales by time of day) ===
-    # OPTIMIZATION #2: Raised thresholds to filter low-quality trades (better risk/reward)
+    # FIX 2026-01-10: Reverted to original levels (Jan 8 increases were too strict - 0 trades in 3 weeks)
     # Later in day = thinner premiums = need higher minimum to justify risk
     if now_et.hour < 11:
-        MIN_CREDIT = 1.50   # Before 11 AM: $1.50 (was $1.25)
-    elif now_et.hour < 12:
-        MIN_CREDIT = 1.75   # 11 AM-12 PM: $1.75 (new tier)
+        MIN_CREDIT = 1.25   # Before 11 AM: $1.25 (REVERTED from $1.50)
     elif now_et.hour < 13:
-        MIN_CREDIT = 2.25   # 12-1 PM: $2.25 (was $1.50)
+        MIN_CREDIT = 1.50   # 11 AM-1 PM: $1.50 (REVERTED from $1.75-$2.25)
     else:
-        MIN_CREDIT = 3.00   # 1-2 PM: $3.00 (was $2.00)
+        MIN_CREDIT = 2.00   # After 1 PM: $2.00 (REVERTED from $3.00)
 
     if expected_credit < MIN_CREDIT:
         log(f"Credit ${expected_credit:.2f} below time-based minimum ${MIN_CREDIT:.2f} for {now_et.strftime('%H:%M')} ET — NO TRADE")

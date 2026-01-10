@@ -25,9 +25,9 @@ from typing import List, Optional
 NEAR_PIN_MAX = 6           # 0-6pts: Iron Condor (symmetric, HIGH confidence)
 MODERATE_DISTANCE_MIN = 7  # 7-15pts: Directional spread (HIGH confidence)
 MODERATE_DISTANCE_MAX = 15
-FAR_FROM_PIN_MIN = 16      # 16-25pts: Conservative spread (MEDIUM confidence)
-FAR_FROM_PIN_MAX = 25
-TOO_FAR_MIN = 26           # >25pts: Skip (too far from pin, LOW confidence)
+FAR_FROM_PIN_MIN = 16      # 16-50pts: Conservative spread (MEDIUM confidence)
+FAR_FROM_PIN_MAX = 50      # FIX 2026-01-10: Increased from 25 to 50 (was rejecting all trades)
+TOO_FAR_MIN = 51           # >50pts: Skip (too far from pin, LOW confidence)
 
 # Strike buffer distances (pts from pin/SPX)
 IC_WING_BUFFER = 20        # Iron Condor: Distance of wings from pin
