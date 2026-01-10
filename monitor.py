@@ -28,6 +28,7 @@ import csv
 import requests
 import pytz
 import numpy as np
+import tempfile  # BUGFIX (2026-01-10): For atomic file writes
 
 # ============================================================================
 #                              CONFIGURATION
@@ -715,22 +716,22 @@ def get_spread_value(order_data):
 #                           TRADE LOG UPDATE
 # ============================================================================
 
-def update_trade_log(order_id, exit_value, exit_reason, entry_credit, entry_time_str):
+def update_trade_log(order_id, exit_value, exit_reason, entry_credit, entry_time_str, position_size=1):
     """Update the CSV trade log with exit information."""
     if not os.path.exists(TRADE_LOG_FILE):
         log(f"Trade log file not found: {TRADE_LOG_FILE}")
         return
-    
+
     try:
         rows = []
         with open(TRADE_LOG_FILE, 'r') as f:
             rows = list(csv.reader(f))
-        
+
         updated = False
         for row in rows[1:]:  # Skip header
             if row and len(row) > 1 and row[1] == str(order_id):
                 exit_time = datetime.datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S')
-                
+
                 # Calculate duration
                 # Security Fix (2026-01-04): Standardize timezone handling
                 try:
@@ -748,9 +749,9 @@ def update_trade_log(order_id, exit_value, exit_reason, entry_credit, entry_time
                 except (ValueError, TypeError, AttributeError) as e:
                     log(f"Error parsing entry time '{entry_time_str}': {e}")
                     duration_min = 0
-                
+
                 # Calculate P/L
-                position_size = int(order.get('position_size', 1))  # Default to 1 for legacy orders
+                # BUGFIX (2026-01-10): position_size now passed as parameter instead of using undefined 'order' variable
                 pl_dollar_per_contract = (entry_credit - exit_value) * 100  # Per contract
                 pl_dollar = pl_dollar_per_contract * position_size  # Total P/L
                 pl_pct = ((entry_credit - exit_value) / entry_credit) * 100 if entry_credit > 0 else 0
@@ -770,10 +771,27 @@ def update_trade_log(order_id, exit_value, exit_reason, entry_credit, entry_time
                         trades.append({'pnl': pl_dollar_per_contract, 'timestamp': datetime.datetime.now().isoformat()})
                         balance_data['trades'] = trades[-50:]  # Keep last 50
                         balance_data['total_trades'] = balance_data.get('total_trades', 0) + 1
+                        balance_data['last_updated'] = datetime.datetime.now().isoformat()
 
-                        # Save updated balance
-                        with open(balance_file, 'w') as f:
-                            json.dump(balance_data, f, indent=2)
+                        # BUGFIX (2026-01-10): Use atomic write to prevent corruption
+                        temp_fd, temp_path = tempfile.mkstemp(
+                            dir=os.path.dirname(balance_file),
+                            prefix='.account_balance_',
+                            suffix='.tmp'
+                        )
+                        try:
+                            with os.fdopen(temp_fd, 'w') as f:
+                                json.dump(balance_data, f, indent=2)
+                                f.flush()
+                                os.fsync(f.fileno())  # Force write to disk
+                            # Atomic rename
+                            os.replace(temp_path, balance_file)
+                        except:
+                            try:
+                                os.unlink(temp_path)
+                            except:
+                                pass
+                            raise
 
                         log(f"Account balance updated: ${balance_data['balance']:,.0f} ({pl_dollar:+.2f} from {position_size}x contracts)")
                 except Exception as e:
@@ -875,7 +893,15 @@ def check_and_close_positions():
             spx_price = float(spx_quote.get('quotes', {}).get('quote', {}).get('last', 0))
 
             if spx_price > 0:
-                strikes = order.get('strikes', [])
+                # BUGFIX (2026-01-10): Parse strikes string to list
+                strikes_raw = order.get('strikes', [])
+                if isinstance(strikes_raw, str) and '/' in strikes_raw:
+                    strikes = [float(s.strip()) for s in strikes_raw.split('/')]
+                elif isinstance(strikes_raw, list):
+                    strikes = strikes_raw
+                else:
+                    strikes = []
+
                 short_indices = order.get('short_indices', [])
 
                 # Check if any short strikes are breached
@@ -1069,7 +1095,9 @@ def check_and_close_positions():
                 success = close_spread(order)
 
             if success:
-                update_trade_log(order_id, current_value, exit_reason, entry_credit, entry_time)
+                # BUGFIX (2026-01-10): Extract position_size and pass to update_trade_log
+                position_size = order.get('position_size', 1)
+                update_trade_log(order_id, current_value, exit_reason, entry_credit, entry_time, position_size)
                 # Send Discord exit alert
                 strategy = order.get('strategy', 'SPREAD')
                 strikes = order.get('strikes', 'N/A')

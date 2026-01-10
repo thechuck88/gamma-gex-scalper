@@ -17,7 +17,7 @@ yfinance_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %
 yfinance_logger.addHandler(yfinance_handler)
 yfinance_logger.setLevel(logging.WARNING)
 
-import datetime, os, requests, json, csv, pytz, time, sys, math, fcntl
+import datetime, os, requests, json, csv, pytz, time, sys, math, fcntl, tempfile
 import yfinance as yf
 import pandas as pd
 from datetime import date
@@ -617,11 +617,32 @@ def load_account_balance():
         return STARTING_CAPITAL, {'balance': STARTING_CAPITAL, 'trades': [], 'total_trades': 0}
 
 def save_account_balance(data):
-    """Save account balance to file."""
+    """Save account balance to file using atomic write."""
     try:
         data['last_updated'] = datetime.datetime.now().isoformat()
-        with open(ACCOUNT_BALANCE_FILE, 'w') as f:
-            json.dump(data, f, indent=2)
+
+        # BUGFIX (2026-01-10): Use atomic write to prevent corruption
+        # Write to temp file first, then atomic rename
+        temp_fd, temp_path = tempfile.mkstemp(
+            dir=os.path.dirname(ACCOUNT_BALANCE_FILE),
+            prefix='.account_balance_',
+            suffix='.tmp'
+        )
+        try:
+            with os.fdopen(temp_fd, 'w') as f:
+                json.dump(data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())  # Force write to disk
+
+            # Atomic rename (POSIX guarantees atomicity)
+            os.replace(temp_path, ACCOUNT_BALANCE_FILE)
+        except:
+            # Clean up temp file on error
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
+            raise
     except Exception as e:
         log(f"Error saving account balance: {e}")
 
