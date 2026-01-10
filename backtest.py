@@ -54,6 +54,12 @@ TRAILING_TIGHTEN_RATE = 0.4     # Tighten rate
 # NOTE: 1:30 PM removed - worst performer at $61/trade
 ENTRY_TIMES = [0.1, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]  # Hours after 9:30 open
 
+# Auto-scaling parameters (2026-01-10)
+AUTO_SCALE_ENABLED = False      # Enable auto-scaling (set via --auto-scale flag)
+STARTING_CAPITAL = 25000        # Starting account balance
+MAX_CONTRACTS = 10              # Maximum contracts per trade (risk control)
+STOP_LOSS_PER_CONTRACT = 150   # Max loss per contract (from backtest data)
+
 # 2025 FOMC meeting dates (announcement days)
 FOMC_DATES_2025 = [
     '2025-01-29', '2025-03-19', '2025-05-07', '2025-06-18',
@@ -145,6 +151,43 @@ def estimate_fill_probability(vix, entry_credit, hours_after_open):
 
     fill_rate = base_fill_rate + credit_bonus + time_penalty
     return max(0.5, min(0.95, fill_rate))  # Clamp to 50-95%
+
+def calculate_position_size_kelly(account_balance, win_rate, avg_win, avg_loss):
+    """
+    Calculate position size using Half-Kelly criterion.
+
+    Kelly formula: f = (p*W - (1-p)*L) / W
+    where:
+        p = win probability
+        W = avg win amount
+        L = avg loss amount
+        f = fraction of capital to risk
+
+    Uses Half-Kelly (50% of Kelly) for more conservative sizing.
+
+    Args:
+        account_balance: Current account value
+        win_rate: Historical win rate (0-1)
+        avg_win: Average winning trade P&L
+        avg_loss: Average losing trade P&L (positive number)
+
+    Returns:
+        int: Number of contracts to trade (1-MAX_CONTRACTS)
+    """
+    if account_balance < STARTING_CAPITAL * 0.5:
+        return 0  # Stop trading if account drops below 50% of starting capital
+
+    # Kelly fraction
+    kelly_f = (win_rate * avg_win - (1 - win_rate) * avg_loss) / avg_win
+
+    # Use half-Kelly for safety
+    half_kelly = kelly_f * 0.5
+
+    # Calculate contracts based on account size and stop loss per contract
+    contracts = int((account_balance * half_kelly) / STOP_LOSS_PER_CONTRACT)
+
+    # Enforce bounds: minimum 1, maximum MAX_CONTRACTS
+    return max(1, min(contracts, MAX_CONTRACTS))
 
 def black_scholes_put(S, K, T, r, sigma):
     """Black-Scholes put price."""
@@ -392,7 +435,7 @@ def simulate_trade_outcome(setup, entry_credit, spx_open, spx_high, spx_low, spx
 #                           MAIN BACKTEST
 # ============================================================================
 
-def run_backtest(days=180, realistic=False):
+def run_backtest(days=180, realistic=False, auto_scale=False):
     """Run the GEX scalper backtest."""
 
     print("=" * 70)
@@ -520,9 +563,26 @@ def run_backtest(days=180, realistic=False):
     print(f"Filters: VIX < {VIX_MAX_THRESHOLD}, 2 PM cutoff, min credit $1.00")
     print(f"Excluding: FOMC days, short trading days")
 
+    # Auto-scaling tracking
+    if auto_scale:
+        account_balance = STARTING_CAPITAL
+        print(f"\n🔢 AUTO-SCALING ENABLED:")
+        print(f"  Starting Capital: ${account_balance:,.0f}")
+        print(f"  Position Sizing: Half-Kelly (rolling stats)")
+        print(f"  Max Contracts: {MAX_CONTRACTS}")
+        print(f"  Stop Loss/Contract: ${STOP_LOSS_PER_CONTRACT}")
+        balance_history = []
+        contract_history = []
+    else:
+        print(f"\n📊 FIXED POSITION SIZE: 1 contract per trade")
+
     trades = []
     skipped_days = {'fomc': 0, 'short': 0, 'vix': 0}
     prev_close = None
+
+    # Rolling statistics for Kelly calculation (start with baseline estimates)
+    rolling_wins = []
+    rolling_losses = []
 
     for date, row in spy.iterrows():
         date_str = date.strftime('%Y-%m-%d')
@@ -646,6 +706,46 @@ def run_backtest(days=180, realistic=False):
             outcome = simulate_trade_outcome(setup, entry_credit, spx_at_entry, spx_high, spx_low, spx_close, vix_val)
 
             if outcome:
+                # Calculate position size (auto-scaling or fixed)
+                if auto_scale:
+                    # Use rolling statistics to calculate Kelly position size
+                    if len(rolling_wins) >= 10 and len(rolling_losses) >= 5:
+                        # Have enough history for Kelly
+                        win_rate = len(rolling_wins) / (len(rolling_wins) + len(rolling_losses))
+                        avg_win = np.mean(rolling_wins[-50:])  # Use last 50 wins
+                        avg_loss = np.mean(rolling_losses[-50:])  # Use last 50 losses
+                    else:
+                        # Bootstrap with baseline stats from 1-year backtest
+                        win_rate = 0.588
+                        avg_win = 223
+                        avg_loss = 103
+
+                    position_size = calculate_position_size_kelly(account_balance, win_rate, avg_win, avg_loss)
+
+                    if position_size == 0:
+                        # Account dropped below 50% - stop trading
+                        print(f"\n⚠️  TRADING HALTED: Account below 50% of starting capital")
+                        print(f"  Current balance: ${account_balance:,.0f}")
+                        break
+                else:
+                    position_size = 1  # Fixed 1 contract
+
+                # Scale P&L by position size
+                pnl_per_contract = outcome['pnl_dollars']
+                total_pnl = pnl_per_contract * position_size
+
+                # Update rolling statistics (for next trade's Kelly calc)
+                if auto_scale:
+                    if pnl_per_contract > 0:
+                        rolling_wins.append(pnl_per_contract)
+                    else:
+                        rolling_losses.append(abs(pnl_per_contract))
+
+                    # Update account balance
+                    account_balance += total_pnl
+                    balance_history.append(account_balance)
+                    contract_history.append(position_size)
+
                 trades.append({
                     'date': date_str,
                     'entry_time': entry_time_label,
@@ -666,6 +766,10 @@ def run_backtest(days=180, realistic=False):
                     'confidence': setup['confidence'],
                     'strikes': '/'.join(map(str, strikes)),
                     'entry_credit': round(entry_credit, 2),
+                    'position_size': position_size,
+                    'pnl_per_contract': pnl_per_contract,
+                    'total_pnl': total_pnl if auto_scale else pnl_per_contract,
+                    'account_balance': account_balance if auto_scale else None,
                     **outcome
                 })
                 # Allow multiple trades per day at different entry times
@@ -722,6 +826,20 @@ def run_backtest(days=180, realistic=False):
 
         print("-" * 40)
 
+        # Recalculate total_pnl and account_balance if auto-scaling (adjustments changed pnl_dollars)
+        if auto_scale:
+            df['pnl_per_contract'] = df['pnl_dollars']  # Update per-contract P&L after adjustments
+            df['total_pnl'] = df['pnl_per_contract'] * df['position_size']  # Recalc scaled P&L
+
+            # Recalculate final account balance
+            account_balance = STARTING_CAPITAL + df['total_pnl'].sum()
+
+            # Recalculate balance history (for drawdown calc)
+            balance_history = [STARTING_CAPITAL]
+            for total_pnl in df['total_pnl']:
+                balance_history.append(balance_history[-1] + total_pnl)
+            balance_history.pop(0)  # Remove starting capital
+
     # ============================================================================
     #                           RESULTS SUMMARY
     # ============================================================================
@@ -731,23 +849,42 @@ def run_backtest(days=180, realistic=False):
     print("=" * 70)
 
     total_trades = len(df)
-    winners = df[df['pnl_dollars'] > 0]
-    losers = df[df['pnl_dollars'] <= 0]
+    winners = df[df['pnl_per_contract'] > 0]
+    losers = df[df['pnl_per_contract'] <= 0]
 
     win_rate = len(winners) / total_trades * 100
-    total_pnl = df['pnl_dollars'].sum()
-    avg_win = winners['pnl_dollars'].mean() if len(winners) > 0 else 0
-    avg_loss = losers['pnl_dollars'].mean() if len(losers) > 0 else 0
+
+    # Use scaled P&L if auto-scaling, otherwise per-contract P&L
+    if auto_scale:
+        total_pnl = df['total_pnl'].sum()
+        final_balance = account_balance
+        total_return_pct = ((final_balance - STARTING_CAPITAL) / STARTING_CAPITAL) * 100
+    else:
+        total_pnl = df['pnl_per_contract'].sum()
+
+    avg_win = winners['pnl_per_contract'].mean() if len(winners) > 0 else 0
+    avg_loss = losers['pnl_per_contract'].mean() if len(losers) > 0 else 0
 
     print(f"\nTotal Trades:     {total_trades}")
     print(f"Winners:          {len(winners)} ({win_rate:.1f}%)")
     print(f"Losers:           {len(losers)} ({100-win_rate:.1f}%)")
-    print(f"\nTotal P/L:        ${total_pnl:+,.2f}")
-    print(f"Avg Winner:       ${avg_win:+,.2f}")
-    print(f"Avg Loser:        ${avg_loss:+,.2f}")
+
+    if auto_scale:
+        print(f"\nStarting Capital: ${STARTING_CAPITAL:,.0f}")
+        print(f"Final Balance:    ${final_balance:,.0f}")
+        print(f"Total Return:     {total_return_pct:+.1f}%")
+        print(f"Total P/L:        ${total_pnl:+,.2f}")
+        print(f"\nAvg Position Size: {np.mean(contract_history):.1f} contracts")
+        print(f"Max Position Size: {max(contract_history)} contracts")
+        print(f"Avg Winner (per contract): ${avg_win:+,.2f}")
+        print(f"Avg Loser (per contract):  ${avg_loss:+,.2f}")
+    else:
+        print(f"\nTotal P/L:        ${total_pnl:+,.2f}")
+        print(f"Avg Winner:       ${avg_win:+,.2f}")
+        print(f"Avg Loser:        ${avg_loss:+,.2f}")
 
     if avg_loss != 0:
-        profit_factor = abs(winners['pnl_dollars'].sum() / losers['pnl_dollars'].sum()) if losers['pnl_dollars'].sum() != 0 else float('inf')
+        profit_factor = abs(winners['pnl_per_contract'].sum() / losers['pnl_per_contract'].sum()) if losers['pnl_per_contract'].sum() != 0 else float('inf')
         print(f"Profit Factor:    {profit_factor:.2f}")
 
     # Trailing stop statistics
@@ -1167,10 +1304,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='GEX Scalper Backtest')
     parser.add_argument('--days', type=int, default=180, help='Number of trading days to backtest')
     parser.add_argument('--realistic', action='store_true', help='Apply realistic adjustments (slippage, 10%% SL hits, 2%% gap risk)')
+    parser.add_argument('--auto-scale', action='store_true', help='Enable Half-Kelly auto-scaling (position size grows with account)')
     parser.add_argument('--monte-carlo', type=int, metavar='N', help='Run N Monte Carlo simulations')
     args = parser.parse_args()
 
-    df = run_backtest(days=args.days, realistic=args.realistic)
+    df = run_backtest(days=args.days, realistic=args.realistic, auto_scale=args.auto_scale)
 
     if args.monte_carlo and df is not None:
         run_monte_carlo(df, simulations=args.monte_carlo)
