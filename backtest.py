@@ -1172,44 +1172,106 @@ def run_backtest(days=180, realistic=False, auto_scale=False):
 #                              MAIN
 # ============================================================================
 
-def run_monte_carlo(df, simulations=1000, periods=252):
+def run_monte_carlo(df, simulations=1000, periods=252, auto_scale=False):
     """
     Run Monte Carlo simulation on trade results.
 
     Randomly samples from actual trade P/L to project future outcomes.
     Shows range of possible results with confidence intervals.
+
+    If auto_scale=True, simulates position sizing using Half-Kelly as account grows.
     """
     print("\n" + "=" * 70)
     print(f"MONTE CARLO SIMULATION ({simulations:,} runs, {periods} trading days)")
+    if auto_scale:
+        print(f"MODE: AUTO-SCALING (Half-Kelly position sizing)")
+    else:
+        print(f"MODE: FIXED POSITION SIZE (1 contract)")
     print("=" * 70)
 
-    # Get trade P/L distribution
-    trade_pnls = df['pnl_dollars'].values
+    # Get trade P/L distribution (per-contract)
+    trade_pnls = df['pnl_per_contract'].values if 'pnl_per_contract' in df.columns else df['pnl_dollars'].values
     trades_per_day = len(df) / df['date'].nunique()
 
     print(f"\nInput: {len(trade_pnls)} historical trades")
     print(f"Avg trades/day: {trades_per_day:.1f}")
-    print(f"Trade P/L range: ${trade_pnls.min():.0f} to ${trade_pnls.max():.0f}")
+    print(f"Trade P/L range (per contract): ${trade_pnls.min():.0f} to ${trade_pnls.max():.0f}")
     print(f"Trade P/L mean: ${trade_pnls.mean():.2f}, std: ${trade_pnls.std():.2f}")
+
+    if auto_scale:
+        print(f"\nAuto-scaling settings:")
+        print(f"  Starting capital: ${STARTING_CAPITAL:,.0f}")
+        print(f"  Max contracts: {MAX_CONTRACTS}")
+        print(f"  Position sizing: Half-Kelly (rolling)")
 
     # Run simulations
     final_pnls = []
+    final_balances = []
     max_drawdowns = []
     win_rates = []
 
-    for _ in range(simulations):
+    for sim_idx in range(simulations):
         # Sample trades for N trading days
         n_trades = int(trades_per_day * periods)
-        sampled = np.random.choice(trade_pnls, size=n_trades, replace=True)
+        sampled_pnls = np.random.choice(trade_pnls, size=n_trades, replace=True)
 
-        # Calculate equity curve
-        equity = np.cumsum(sampled)
-        peak = np.maximum.accumulate(equity)
-        drawdown = equity - peak
+        if auto_scale:
+            # Simulate with dynamic position sizing
+            account = STARTING_CAPITAL
+            equity_curve = [0]
+            rolling_wins = []
+            rolling_losses = []
 
-        final_pnls.append(equity[-1])
-        max_drawdowns.append(drawdown.min())
-        win_rates.append((sampled > 0).mean() * 100)
+            for trade_pnl in sampled_pnls:
+                # Calculate position size using Half-Kelly
+                if len(rolling_wins) >= 10 and len(rolling_losses) >= 5:
+                    win_rate = len(rolling_wins) / (len(rolling_wins) + len(rolling_losses))
+                    avg_win = np.mean(rolling_wins[-50:])
+                    avg_loss = np.mean(rolling_losses[-50:])
+                else:
+                    # Bootstrap with baseline stats
+                    win_rate = 0.588
+                    avg_win = 223
+                    avg_loss = 103
+
+                position_size = calculate_position_size_kelly(account, win_rate, avg_win, avg_loss)
+
+                if position_size == 0:
+                    # Account dropped below 50% - stop trading
+                    break
+
+                # Scale P&L by position size
+                scaled_pnl = trade_pnl * position_size
+
+                # Update rolling stats
+                if trade_pnl > 0:
+                    rolling_wins.append(trade_pnl)
+                else:
+                    rolling_losses.append(abs(trade_pnl))
+
+                # Update account
+                account += scaled_pnl
+                equity_curve.append(account - STARTING_CAPITAL)
+
+            # Calculate final metrics
+            equity_curve = np.array(equity_curve)
+            peak = np.maximum.accumulate(equity_curve)
+            drawdown = equity_curve - peak
+
+            final_pnls.append(equity_curve[-1])
+            final_balances.append(account)
+            max_drawdowns.append(drawdown.min())
+            win_rates.append((sampled_pnls > 0).mean() * 100)
+        else:
+            # Fixed position size (original logic)
+            equity = np.cumsum(sampled_pnls)
+            peak = np.maximum.accumulate(equity)
+            drawdown = equity - peak
+
+            final_pnls.append(equity[-1])
+            final_balances.append(equity[-1])
+            max_drawdowns.append(drawdown.min())
+            win_rates.append((sampled_pnls > 0).mean() * 100)
 
     final_pnls = np.array(final_pnls)
     max_drawdowns = np.array(max_drawdowns)
@@ -1248,13 +1310,24 @@ def run_monte_carlo(df, simulations=1000, periods=252):
 
     # Probability of various outcomes
     print("\n" + "-" * 50)
-    print("PROBABILITY OF OUTCOMES:")
-    print("-" * 50)
-    print(f"  P(Loss):          {ruin_pct:>6.1f}%")
-    print(f"  P(> $25K):        {(final_pnls > 25000).mean()*100:>6.1f}%")
-    print(f"  P(> $50K):        {(final_pnls > 50000).mean()*100:>6.1f}%")
-    print(f"  P(> $75K):        {(final_pnls > 75000).mean()*100:>6.1f}%")
-    print(f"  P(> $100K):       {(final_pnls > 100000).mean()*100:>6.1f}%")
+    if auto_scale:
+        print("PROBABILITY OF OUTCOMES (Final Account Balance):")
+        print("-" * 50)
+        final_balances = np.array(final_balances)
+        print(f"  P(Loss):          {(final_balances < STARTING_CAPITAL).mean()*100:>6.1f}%")
+        print(f"  P(> $50K):        {(final_balances > 50000).mean()*100:>6.1f}%")
+        print(f"  P(> $100K):       {(final_balances > 100000).mean()*100:>6.1f}%")
+        print(f"  P(> $250K):       {(final_balances > 250000).mean()*100:>6.1f}%")
+        print(f"  P(> $500K):       {(final_balances > 500000).mean()*100:>6.1f}%")
+        print(f"  P(> $1M):         {(final_balances > 1000000).mean()*100:>6.1f}%")
+    else:
+        print("PROBABILITY OF OUTCOMES:")
+        print("-" * 50)
+        print(f"  P(Loss):          {ruin_pct:>6.1f}%")
+        print(f"  P(> $25K):        {(final_pnls > 25000).mean()*100:>6.1f}%")
+        print(f"  P(> $50K):        {(final_pnls > 50000).mean()*100:>6.1f}%")
+        print(f"  P(> $75K):        {(final_pnls > 75000).mean()*100:>6.1f}%")
+        print(f"  P(> $100K):       {(final_pnls > 100000).mean()*100:>6.1f}%")
 
     # Sortino distribution
     print("\n" + "-" * 50)
@@ -1311,4 +1384,4 @@ if __name__ == "__main__":
     df = run_backtest(days=args.days, realistic=args.realistic, auto_scale=args.auto_scale)
 
     if args.monte_carlo and df is not None:
-        run_monte_carlo(df, simulations=args.monte_carlo)
+        run_monte_carlo(df, simulations=args.monte_carlo, auto_scale=args.auto_scale)
