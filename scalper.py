@@ -1246,11 +1246,11 @@ try:
         # PUT spread: short strike is higher, we profit if SPX stays above
         entry_distance = spx - max(strikes)
     else:  # IC
-        # Iron condor: distance to nearest short strike
-        strikes_sorted = sorted(strikes)
-        call_short = strikes_sorted[1]  # Second strike (call short)
-        put_short = strikes_sorted[2]   # Third strike (put short)
-        entry_distance = min(spx - put_short, call_short - spx)
+        # Iron condor: strikes = [call_short, call_long, put_short, put_long]
+        # Distance to nearest short strike (call_short above, put_short below)
+        call_short = strikes[0]
+        put_short = strikes[2]
+        entry_distance = min(call_short - spx, spx - put_short)
 
     order_data = {
         "order_id": order_id,
