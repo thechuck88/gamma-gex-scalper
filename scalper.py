@@ -1104,14 +1104,32 @@ try:
         raise SystemExit("Order placement failed: Cannot parse API response")
 
     # === REAL CREDIT + FINAL TP/SL ===
-    # Wait briefly for fill, then fetch actual fill price
-    time.sleep(1)
+    # UNFILLED ORDER TIMEOUT LOGIC (2026-01-10):
+    # Monitor order for up to 5 minutes, checking every 10 seconds
+    # Cancel if not filled within timeout to prevent late fills without monitoring
+    FILL_TIMEOUT = 300  # 5 minutes
+    CHECK_INTERVAL = 10  # Check every 10 seconds
+    max_checks = FILL_TIMEOUT // CHECK_INTERVAL
+
+    log(f"Monitoring order {order_id} for fill (timeout: {FILL_TIMEOUT}s)")
     credit = None
-    for attempt in range(3):
+    order_filled = False
+
+    for check_num in range(max_checks):
+        time.sleep(CHECK_INTERVAL)
+        elapsed = (check_num + 1) * CHECK_INTERVAL
+
         try:
             order_detail = requests.get(f"{BASE_URL}/accounts/{TRADIER_ACCOUNT_ID}/orders/{order_id}", headers=HEADERS, timeout=10).json()
             fill_price = order_detail.get("order", {}).get("avg_fill_price")
             status = order_detail.get("order", {}).get("status", "")
+
+            log(f"[{elapsed}s] Order status: {status}, fill_price: {fill_price}")
+
+            # Check if order was canceled or rejected
+            if status in ["canceled", "rejected", "expired"]:
+                log(f"Order {status} by broker — no trade")
+                raise SystemExit(f"Order {status} — exiting without position")
 
             # CRITICAL: Verify all legs filled (prevent naked positions)
             legs = order_detail.get("order", {}).get("leg", [])
@@ -1121,35 +1139,58 @@ try:
             if legs:
                 total_legs = len(legs)
                 filled_legs = sum(1 for leg in legs if leg.get("status") == "filled")
-                log(f"Order leg status: {filled_legs}/{total_legs} filled")
 
                 if filled_legs < total_legs and status in ["filled", "partially_filled"]:
                     log(f"CRITICAL: Partial fill detected! {filled_legs}/{total_legs} legs filled")
-                    log(f"Attempting emergency close of filled legs to avoid naked position...")
-                    # Emergency: close filled legs immediately
-                    # This is a safety measure - in production you'd implement leg-by-leg close
                     log(f"MANUAL INTERVENTION REQUIRED: Check Tradier for order {order_id}")
                     raise SystemExit("Partial fill detected - aborting to prevent naked position")
 
-            log(f"Order status: {status}, avg_fill_price: {fill_price}")
-            if fill_price is not None and fill_price != 0:
+                if filled_legs == total_legs and status == "filled":
+                    # All legs filled - order complete
+                    log(f"✓ Order filled: {filled_legs}/{total_legs} legs")
+                    order_filled = True
+
+            if fill_price is not None and fill_price != 0 and order_filled:
                 # Credit spreads report negative fill price (we receive money)
                 credit = abs(float(fill_price))
+                log(f"✓ Fill confirmed at ${credit:.2f} after {elapsed}s")
                 break
-            if status == "filled":
-                # Filled but no price yet, wait and retry
-                time.sleep(1)
-        except SystemExit:
-            raise  # Re-raise SystemExit for partial fills
-        except Exception as e:
-            log(f"Fill price fetch attempt {attempt+1} failed: {e}")
-            time.sleep(1)
 
+        except SystemExit:
+            raise  # Re-raise SystemExit for partial fills or cancellations
+        except Exception as e:
+            log(f"Fill check error at {elapsed}s: {e}")
+            # Continue checking - might be temporary API issue
+
+    # If not filled after timeout, cancel the order
+    if credit is None or not order_filled:
+        log(f"⏱️ Order NOT filled after {FILL_TIMEOUT}s — CANCELING to prevent late fill")
+        try:
+            cancel_response = requests.delete(
+                f"{BASE_URL}/accounts/{TRADIER_ACCOUNT_ID}/orders/{order_id}",
+                headers=HEADERS,
+                timeout=10
+            )
+            if cancel_response.status_code == 200:
+                log(f"✓ Order {order_id} canceled successfully")
+            else:
+                log(f"⚠️ Cancel request returned status {cancel_response.status_code}")
+                log(f"Response: {cancel_response.text}")
+        except Exception as e:
+            log(f"ERROR: Failed to cancel order {order_id}: {e}")
+            log(f"MANUAL INTERVENTION REQUIRED: Cancel order manually in Tradier")
+
+        log("No trade taken — unfilled order canceled")
+        send_discord_skip_alert(
+            f"Order unfilled after {FILL_TIMEOUT}s — canceled",
+            {**run_data, 'order_id': order_id, 'limit_price': limit_price}
+        )
+        raise SystemExit("Order unfilled and canceled")
+
+    # Verify we got a valid credit
     if credit is None or credit == 0:
-        log("FATAL: Could not determine fill price — position opened but credit unknown!")
+        log("FATAL: Order filled but could not determine fill price!")
         log("Manual intervention required — check Tradier for open position")
-        # Still save to monitor with expected_credit so position can be tracked
-        # But mark it as needing attention
         credit = expected_credit
         log(f"Using expected credit ${credit:.2f} for tracking ONLY — verify manually!")
     else:
