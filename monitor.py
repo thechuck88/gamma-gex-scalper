@@ -81,7 +81,7 @@ TRAILING_DISTANCE_MIN = 0.08    # Minimum trail distance as profit rises (8%)
 TRAILING_TIGHTEN_RATE = 0.4     # How fast it tightens (0.4 = every 2.5% gain, trail tightens 1%)
 
 # Stop loss grace period - let positions settle before triggering SL
-SL_GRACE_PERIOD_SEC = 300       # OPTIMIZATION #1: 5 minutes grace (was 210s) - reduces false stop triggers
+SL_GRACE_PERIOD_SEC = 180       # OPTIMIZATION #2: 3 minutes grace (optimal from backtests) - faster exit from losers
 SL_EMERGENCY_PCT = 0.40         # Emergency stop - trigger immediately if loss exceeds 40%
 
 # Progressive hold-to-expiration settings (2026-01-10)
