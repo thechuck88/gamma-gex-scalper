@@ -750,8 +750,34 @@ def update_trade_log(order_id, exit_value, exit_reason, entry_credit, entry_time
                     duration_min = 0
                 
                 # Calculate P/L
-                pl_dollar = (entry_credit - exit_value) * 100  # Per contract
+                position_size = int(order.get('position_size', 1))  # Default to 1 for legacy orders
+                pl_dollar_per_contract = (entry_credit - exit_value) * 100  # Per contract
+                pl_dollar = pl_dollar_per_contract * position_size  # Total P/L
                 pl_pct = ((entry_credit - exit_value) / entry_credit) * 100 if entry_credit > 0 else 0
+
+                # Update account balance (autoscaling)
+                try:
+                    balance_file = "/root/gamma/data/account_balance.json"
+                    if os.path.exists(balance_file):
+                        with open(balance_file, 'r') as f:
+                            balance_data = json.load(f)
+
+                        # Update balance
+                        balance_data['balance'] = balance_data.get('balance', 20000) + pl_dollar
+
+                        # Add trade to rolling statistics (keep last 50)
+                        trades = balance_data.get('trades', [])
+                        trades.append({'pnl': pl_dollar_per_contract, 'timestamp': datetime.datetime.now().isoformat()})
+                        balance_data['trades'] = trades[-50:]  # Keep last 50
+                        balance_data['total_trades'] = balance_data.get('total_trades', 0) + 1
+
+                        # Save updated balance
+                        with open(balance_file, 'w') as f:
+                            json.dump(balance_data, f, indent=2)
+
+                        log(f"Account balance updated: ${balance_data['balance']:,.0f} ({pl_dollar:+.2f} from {position_size}x contracts)")
+                except Exception as e:
+                    log(f"Error updating account balance: {e}")
                 
                 # Update row: Exit_Time, Exit_Value, P/L_$, P/L_%, Exit_Reason, Duration_Min
                 # New CSV format with Account_ID at index 2, exit fields start at 8

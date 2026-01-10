@@ -582,6 +582,110 @@ MAX_CONSEC_DOWN_DAYS = 5  # Skip if 6+ down days (was 2 - too conservative)
 # Maximum concurrent positions (risk management)
 MAX_DAILY_POSITIONS = 3  # Limit concurrent open positions to prevent unbounded risk
 
+# ========== AUTOSCALING CONFIGURATION (2026-01-10) ==========
+AUTOSCALING_ENABLED = True          # Enable Half-Kelly position sizing
+STARTING_CAPITAL = 20000             # Starting account balance ($20k for conservative start)
+MAX_CONTRACTS_PER_TRADE = 3          # Conservative max (2-3 contracts for $10k-25k accounts)
+STOP_LOSS_PER_CONTRACT = 150         # Max loss per contract (from backtest data)
+ACCOUNT_BALANCE_FILE = "/root/gamma/data/account_balance.json"  # Track balance across restarts
+
+# Bootstrap statistics (from realistic backtest until we have real data)
+BOOTSTRAP_WIN_RATE = 0.582           # 58.2% win rate (realistic mode)
+BOOTSTRAP_AVG_WIN = 266              # Avg winner per contract
+BOOTSTRAP_AVG_LOSS = 109             # Avg loser per contract
+
+def load_account_balance():
+    """Load account balance from file. Returns (balance, trade_stats dict)."""
+    if not os.path.exists(ACCOUNT_BALANCE_FILE):
+        # First time - initialize with starting capital
+        data = {
+            'balance': STARTING_CAPITAL,
+            'last_updated': datetime.datetime.now().isoformat(),
+            'trades': [],  # Store last 50 trades for rolling stats
+            'total_trades': 0
+        }
+        save_account_balance(data)
+        return STARTING_CAPITAL, data
+
+    try:
+        with open(ACCOUNT_BALANCE_FILE, 'r') as f:
+            data = json.load(f)
+        balance = data.get('balance', STARTING_CAPITAL)
+        return balance, data
+    except Exception as e:
+        log(f"Error loading account balance: {e}, using starting capital")
+        return STARTING_CAPITAL, {'balance': STARTING_CAPITAL, 'trades': [], 'total_trades': 0}
+
+def save_account_balance(data):
+    """Save account balance to file."""
+    try:
+        data['last_updated'] = datetime.datetime.now().isoformat()
+        with open(ACCOUNT_BALANCE_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        log(f"Error saving account balance: {e}")
+
+def calculate_position_size_kelly(account_balance, trade_stats):
+    """
+    Calculate position size using Half-Kelly criterion.
+
+    Kelly formula: f = (p*W - (1-p)*L) / W
+    where:
+        p = win probability
+        W = avg win amount
+        L = avg loss amount
+        f = fraction of capital to risk
+
+    Uses Half-Kelly (50% of Kelly) for more conservative sizing.
+
+    Returns: int (number of contracts, 1 to MAX_CONTRACTS_PER_TRADE)
+    """
+    if not AUTOSCALING_ENABLED:
+        return 1  # Fixed size if autoscaling disabled
+
+    # Stop trading if account drops below 50% of starting capital
+    if account_balance < STARTING_CAPITAL * 0.5:
+        log(f"⚠️  Account below 50% of starting capital (${account_balance:,.0f} < ${STARTING_CAPITAL * 0.5:,.0f})")
+        return 0
+
+    trades = trade_stats.get('trades', [])
+
+    # Use rolling statistics if we have enough trades
+    if len(trades) >= 10:
+        wins = [t['pnl'] for t in trades if t['pnl'] > 0]
+        losses = [abs(t['pnl']) for t in trades if t['pnl'] <= 0]
+
+        if len(wins) >= 5 and len(losses) >= 2:
+            win_rate = len(wins) / len(trades)
+            avg_win = sum(wins[-50:]) / len(wins[-50:])  # Use last 50 wins
+            avg_loss = sum(losses[-50:]) / len(losses[-50:])  # Use last 50 losses
+        else:
+            # Not enough data, use bootstrap
+            win_rate = BOOTSTRAP_WIN_RATE
+            avg_win = BOOTSTRAP_AVG_WIN
+            avg_loss = BOOTSTRAP_AVG_LOSS
+    else:
+        # Bootstrap with baseline stats
+        win_rate = BOOTSTRAP_WIN_RATE
+        avg_win = BOOTSTRAP_AVG_WIN
+        avg_loss = BOOTSTRAP_AVG_LOSS
+
+    # Kelly fraction
+    kelly_f = (win_rate * avg_win - (1 - win_rate) * avg_loss) / avg_win
+
+    # Use half-Kelly for safety
+    half_kelly = kelly_f * 0.5
+
+    # Calculate contracts based on account size and stop loss per contract
+    contracts = int((account_balance * half_kelly) / STOP_LOSS_PER_CONTRACT)
+
+    # Enforce bounds: minimum 1, maximum MAX_CONTRACTS_PER_TRADE
+    contracts = max(1, min(contracts, MAX_CONTRACTS_PER_TRADE))
+
+    log(f"📊 Position sizing: Balance=${account_balance:,.0f}, WR={win_rate:.1%}, AvgW=${avg_win:.0f}, AvgL=${avg_loss:.0f} → {contracts} contracts")
+
+    return contracts
+
 def get_expected_credit(short_sym, long_sym):
     """Fetch expected credit from option quotes. Returns (credit, success)."""
     try:
@@ -1050,20 +1154,31 @@ try:
 
     log(f"Position limit check passed: {active_positions}/{MAX_DAILY_POSITIONS} positions")
 
+    # === CALCULATE POSITION SIZE (AUTOSCALING) ===
+    account_balance, trade_stats = load_account_balance()
+    position_size = calculate_position_size_kelly(account_balance, trade_stats)
+
+    if position_size == 0:
+        log(f"⚠️  ZERO position size calculated - account below safety threshold")
+        send_discord_skip_alert("Account below 50% of starting capital (safety halt)", run_data)
+        raise SystemExit
+
+    log(f"💰 Position size: {position_size} contract(s) @ ${expected_credit:.2f} each = ${expected_credit * position_size * 100:.0f} total premium")
+
     # === REAL ENTRY ORDER ===
     entry_data = {
         "class": "multileg", "symbol": "SPXW",
         "type": "credit", "price": limit_price, "duration": "day", "tag": "GEXENTRY",
         "option_requirement": "aon",  # CRITICAL FIX-3: All-or-None (prevents partial fills / naked positions)
-        "side[0]": "sell_to_open", "quantity[0]": 1,
+        "side[0]": "sell_to_open", "quantity[0]": position_size,
         "option_symbol[0]": short_syms[0] if setup['strategy']=='IC' else short_sym,
-        "side[1]": "buy_to_open",  "quantity[1]": 1,
+        "side[1]": "buy_to_open",  "quantity[1]": position_size,
         "option_symbol[1]": long_syms[0] if setup['strategy']=='IC' else long_sym
     }
     if setup['strategy'] == 'IC':
         entry_data.update({
-            "side[2]": "sell_to_open", "quantity[2]": 1, "option_symbol[2]": short_syms[1],
-            "side[3]": "buy_to_open",  "quantity[3]": 1, "option_symbol[3]": long_syms[1]
+            "side[2]": "sell_to_open", "quantity[2]": position_size, "option_symbol[2]": short_syms[1],
+            "side[3]": "buy_to_open",  "quantity[3]": position_size, "option_symbol[3]": long_syms[1]
         })
 
     log("Sending entry order...")
@@ -1268,7 +1383,9 @@ try:
         "best_profit_pct": 0,
         "entry_distance": entry_distance,
         "spx_entry": spx,
-        "vix_entry": vix
+        "vix_entry": vix,
+        "position_size": position_size,  # Number of contracts (autoscaling)
+        "account_balance": account_balance  # Track balance at entry for P/L calculation
     }
     existing_orders.append(order_data)
 
