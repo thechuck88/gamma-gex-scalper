@@ -12,7 +12,7 @@ import logging
 # This helps catch API breaking changes before they cause failures
 logging.captureWarnings(True)
 yfinance_logger = logging.getLogger('py.warnings')
-yfinance_handler = logging.FileHandler('/root/gamma/data/yfinance_warnings.log')
+yfinance_handler = logging.FileHandler('/gamma-scalper/data/yfinance_warnings.log')
 yfinance_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 yfinance_logger.addHandler(yfinance_handler)
 yfinance_logger.setLevel(logging.WARNING)
@@ -115,8 +115,8 @@ def send_discord_skip_alert(reason, run_data=None):
     try:
         fields = []
         if run_data:
-            if 'spx' in run_data:
-                fields.append({"name": "SPX", "value": f"{run_data['spx']:.0f}", "inline": True})
+            if 'index_price' in run_data:
+                fields.append({"name": INDEX_CONFIG.code, "value": f"{run_data['index_price']:.0f}", "inline": True})
             if 'vix' in run_data:
                 fields.append({"name": "VIX", "value": f"{run_data['vix']:.2f}", "inline": True})
             if 'expected_move' in run_data:
@@ -177,7 +177,7 @@ def send_discord_entry_alert(setup, credit, strikes, tp_pct, order_id):
                     {"name": "TP Target", "value": f"{tp_target}%", "inline": True},
                     {"name": "Stop Loss", "value": "10%", "inline": True},
                 ],
-                "footer": {"text": f"0DTE SPX"},
+                "footer": {"text": f"0DTE {INDEX_CONFIG.code}"},
                 "timestamp": datetime.datetime.utcnow().isoformat()
             }]
         }
@@ -197,36 +197,55 @@ def send_discord_entry_alert(setup, credit, strikes, tp_pct, order_id):
     except Exception as e:
         print(f"Discord alert failed: {e}")
 
-# ==================== MODE & OVERRIDES ====================
+# ==================== INDEX & MODE PARSING ====================
+# Import index configuration
+from index_config import get_index_config, get_supported_indices
+
+# CRITICAL: Index parameter is REQUIRED
+if len(sys.argv) < 2:
+    print("ERROR: Index parameter required")
+    print(f"Usage: python scalper.py <INDEX> [PAPER|LIVE] [pin_override] [price_override]")
+    print(f"Supported indices: {', '.join(get_supported_indices())}")
+    sys.exit(1)
+
+# Parse index (arg 1)
+index_arg = sys.argv[1].upper()
+try:
+    INDEX_CONFIG = get_index_config(index_arg)
+    print(f"Trading index: {INDEX_CONFIG.name} ({INDEX_CONFIG.code})")
+except ValueError as e:
+    print(f"ERROR: {e}")
+    print(f"Usage: python scalper.py <INDEX> [PAPER|LIVE]")
+    sys.exit(1)
+
+# Parse mode (arg 2, default: PAPER)
 mode = "PAPER"
-pin_override = None
-spx_override = None
-dry_run = False
-
-if len(sys.argv) > 1:
-    arg1 = sys.argv[1].upper()
-    if arg1 in ["REAL", "LIVE"]:
+if len(sys.argv) > 2:
+    arg2 = sys.argv[2].upper()
+    if arg2 in ["REAL", "LIVE"]:
         mode = "REAL"
-    elif arg1 == "PAPER":
+    elif arg2 == "PAPER":
         mode = "PAPER"
-    elif arg1.replace(".", "").isdigit():
-        dry_run = True
-        pin_override = float(arg1)
 
-if len(sys.argv) > 2 and sys.argv[2]:
-    try:
-        pin_override = float(sys.argv[2])
-        dry_run = True
-    except (ValueError, TypeError) as e:
-        print(f"Warning: Invalid pin_override '{sys.argv[2]}': {e}")
-        pass
+# Parse overrides (args 3-4)
+pin_override = None
+price_override = None  # Renamed from spx_override (index-agnostic)
+dry_run = False
 
 if len(sys.argv) > 3 and sys.argv[3]:
     try:
-        spx_override = float(sys.argv[3])
+        pin_override = float(sys.argv[3])
         dry_run = True
     except (ValueError, TypeError) as e:
-        print(f"Warning: Invalid spx_override '{sys.argv[3]}': {e}")
+        print(f"Warning: Invalid pin_override '{sys.argv[3]}': {e}")
+        pass
+
+if len(sys.argv) > 4 and sys.argv[4]:
+    try:
+        price_override = float(sys.argv[4])
+        dry_run = True
+    except (ValueError, TypeError) as e:
+        print(f"Warning: Invalid price_override '{sys.argv[4]}': {e}")
         pass
 
 TRADIER_ACCOUNT_ID = LIVE_ACCOUNT_ID if mode == "REAL" else PAPER_ACCOUNT_ID
@@ -237,7 +256,7 @@ HEADERS = {"Accept": "application/json", "Authorization": f"Bearer {TRADIER_KEY}
 # Set Discord webhook URL based on mode
 DISCORD_WEBHOOK_URL = DISCORD_WEBHOOK_LIVE_URL if mode == "REAL" else DISCORD_WEBHOOK_PAPER_URL
 
-TRADE_LOG_FILE = "/root/gamma/data/trades.csv"
+TRADE_LOG_FILE = "/gamma-scalper/data/trades.csv"
 LOCK_FILE = "/tmp/gexscalper.lock"
 
 ET = pytz.timezone('US/Eastern')
@@ -245,14 +264,15 @@ CUTOFF_HOUR = 14  # No new trades after 2 PM ET (was 3 PM)
 
 # Import shared GEX strategy logic (single source of truth)
 # This ensures backtest and live scalper use identical setup logic
-from core.gex_strategy import get_gex_trade_setup as core_get_gex_trade_setup, round_to_5
+from core.gex_strategy import get_gex_trade_setup as core_get_gex_trade_setup
 
 print("=" * 70)
+print(f"Index: {INDEX_CONFIG.name} ({INDEX_CONFIG.code})")
 print(f"{'LIVE TRADING MODE — REAL MONEY' if mode == 'REAL' else 'PAPER TRADING MODE — 100% SAFE'}")
 print(f"Using account: {TRADIER_ACCOUNT_ID}")
 if dry_run: print("DRY RUN — NO ORDERS WILL BE SENT")
 if pin_override: print(f"PIN OVERRIDE: {pin_override}")
-if spx_override: print(f"SPX OVERRIDE: {spx_override}")
+if price_override: print(f"PRICE OVERRIDE: {price_override}")
 print("=" * 70)
 
 def log(msg):
@@ -465,11 +485,11 @@ def calculate_gap_size():
         log(f"Gap calculation error: {e}")
         return 0.0  # Default to no filter on error
 
-def calculate_gex_pin(spx_price):
-    """Calculate real GEX pin from options open interest and gamma data.
+def calculate_gex_pin(index_price):
+    """Calculate real GEX pin from options open interest and gamma data (index-agnostic).
 
     Uses Tradier LIVE API (read-only) since sandbox has no options data.
-    Returns the strike with highest positive GEX within 50 pts of spot.
+    Returns the strike with highest positive GEX within appropriate distance of spot.
     Returns None if GEX data unavailable - caller must handle this.
     """
     from collections import defaultdict
@@ -486,7 +506,7 @@ def calculate_gex_pin(spx_price):
             lambda: requests.get(
                 f"{LIVE_URL}/markets/options/chains",
                 headers=LIVE_HEADERS,
-                params={"symbol": "SPX", "expiration": today, "greeks": "true"},
+                params={"symbol": INDEX_CONFIG.index_symbol, "expiration": today, "greeks": "true"},
                 timeout=15
             ),
             max_attempts=3,
@@ -529,7 +549,7 @@ def calculate_gex_pin(spx_price):
                 continue
 
             # GEX formula
-            gex = gamma * oi * 100 * (spx_price ** 2)
+            gex = gamma * oi * 100 * (index_price ** 2)
 
             if opt_type == 'call':
                 gex_by_strike[strike] += gex
@@ -541,7 +561,8 @@ def calculate_gex_pin(spx_price):
             return None
 
         # Find strikes near current price with highest positive GEX
-        near_strikes = [(s, g) for s, g in gex_by_strike.items() if abs(s - spx_price) < 50 and g > 0]
+        # Use INDEX_CONFIG.far_max for appropriate distance (50 for SPX, 250 for NDX)
+        near_strikes = [(s, g) for s, g in gex_by_strike.items() if abs(s - index_price) < INDEX_CONFIG.far_max and g > 0]
 
         if near_strikes:
             pin_strike, pin_gex = max(near_strikes, key=lambda x: x[1])
@@ -555,7 +576,7 @@ def calculate_gex_pin(spx_price):
             return pin_strike
         else:
             # No positive GEX near spot, use highest absolute
-            all_near = [(s, g) for s, g in gex_by_strike.items() if abs(s - spx_price) < 50]
+            all_near = [(s, g) for s, g in gex_by_strike.items() if abs(s - index_price) < INDEX_CONFIG.far_max]
             if all_near:
                 pin_strike, _ = max(all_near, key=lambda x: abs(x[1]))
                 log(f"GEX PIN (no positive near): {pin_strike}")
@@ -587,7 +608,7 @@ AUTOSCALING_ENABLED = True          # Enable Half-Kelly position sizing
 STARTING_CAPITAL = 20000             # Starting account balance ($20k for conservative start)
 MAX_CONTRACTS_PER_TRADE = 3          # Conservative max (2-3 contracts for $10k-25k accounts)
 STOP_LOSS_PER_CONTRACT = 150         # Max loss per contract (from backtest data)
-ACCOUNT_BALANCE_FILE = "/root/gamma/data/account_balance.json"  # Track balance across restarts
+ACCOUNT_BALANCE_FILE = "/gamma-scalper/data/account_balance.json"  # Track balance across restarts
 
 # Bootstrap statistics (from realistic backtest until we have real data)
 BOOTSTRAP_WIN_RATE = 0.582           # 58.2% win rate (realistic mode)
@@ -794,11 +815,11 @@ def check_spread_quality(short_sym, long_sym, expected_credit):
         net_spread = short_spread - long_spread  # Short spread costs us, long spread saves us
         net_spread = abs(net_spread)  # Take absolute value
 
-        # Maximum acceptable spread: 25% of credit
-        max_spread = expected_credit * 0.25
+        # Maximum acceptable spread: Use index-specific tolerance (SPX 25%, NDX 30%)
+        max_spread = expected_credit * INDEX_CONFIG.max_spread_pct
 
         log(f"Spread quality: short {short_spread:.2f}, long {long_spread:.2f}, net {net_spread:.2f}")
-        log(f"Max acceptable spread: ${max_spread:.2f} (25% of ${expected_credit:.2f} credit)")
+        log(f"Max acceptable spread: ${max_spread:.2f} ({INDEX_CONFIG.max_spread_pct*100:.0f}% of ${expected_credit:.2f} credit)")
 
         if net_spread > max_spread:
             log(f"❌ Spread too wide: ${net_spread:.2f} > ${max_spread:.2f} (instant slippage would trigger emergency stop)")
@@ -811,20 +832,20 @@ def check_spread_quality(short_sym, long_sym, expected_credit):
         log(f"Error checking spread quality: {e}")
         return True  # Don't block trade on error
 
-def get_gex_trade_setup(pin_price, spx_price, vix):
+def get_gex_trade_setup(pin_price, index_price, vix):
     """
-    Wrapper for core.gex_strategy.get_gex_trade_setup
+    Wrapper for core.gex_strategy.get_gex_trade_setup (index-agnostic)
 
     GEX Pin Strategy: Price gravitates toward the PIN.
-    - SPX above PIN → expect pullback → sell CALL spreads (bearish)
-    - SPX below PIN → expect rally → sell PUT spreads (bullish)
-    - SPX at PIN → expect pinning → sell Iron Condor (neutral)
+    - Index above PIN → expect pullback → sell CALL spreads (bearish)
+    - Index below PIN → expect rally → sell PUT spreads (bullish)
+    - Index at PIN → expect pinning → sell Iron Condor (neutral)
 
     Uses shared module: core.gex_strategy (single source of truth)
     This ensures backtest and live scalper use IDENTICAL logic.
     """
-    # Use core module (GEXTradeSetup dataclass)
-    setup = core_get_gex_trade_setup(pin_price, spx_price, vix)
+    # Use core module (GEXTradeSetup dataclass) with INDEX_CONFIG
+    setup = core_get_gex_trade_setup(pin_price, index_price, vix, INDEX_CONFIG)
 
     # Convert dataclass to dict for backwards compatibility
     return {
@@ -861,20 +882,20 @@ try:
     log("GEX Scalper started")
 
     # === FETCH PRICES (always from LIVE API for real-time data) ===
-    # Get SPX directly - more accurate than SPY*10
-    spx_raw = get_price("SPX")
-    if spx_raw and spx_raw > 1000:
-        spx = spx_override or round(spx_raw)
-        log(f"SPX: {spx} (direct from Tradier LIVE)")
+    # Get index price directly - more accurate than ETF conversion
+    index_raw = get_price(INDEX_CONFIG.index_symbol)
+    if index_raw and index_raw > (INDEX_CONFIG.index_symbol == 'DJX' and 100 or 1000):
+        index_price = price_override or round(index_raw)
+        log(f"{INDEX_CONFIG.code}: {index_price} (direct from Tradier LIVE)")
     else:
-        # Fallback to SPY*10 if SPX quote unavailable
-        spy = get_price("SPY")
-        if not spy or spy < 100:
-            log("FATAL: Could not fetch SPX or SPY price — aborting")
-            send_discord_skip_alert("Could not fetch SPX/SPY price", run_data)
+        # Fallback to ETF * multiplier if index quote unavailable
+        etf_price = get_price(INDEX_CONFIG.etf_symbol)
+        if not etf_price or etf_price < 10:
+            log(f"FATAL: Could not fetch {INDEX_CONFIG.index_symbol} or {INDEX_CONFIG.etf_symbol} price — aborting")
+            send_discord_skip_alert(f"Could not fetch {INDEX_CONFIG.code}/{INDEX_CONFIG.etf_symbol} price", run_data)
             raise SystemExit
-        spx = spx_override or round(spy * 10)
-        log(f"SPX: {spx} (estimated from SPY ${spy:.2f})")
+        index_price = price_override or round(etf_price * INDEX_CONFIG.etf_multiplier)
+        log(f"{INDEX_CONFIG.code}: {index_price} (estimated from {INDEX_CONFIG.etf_symbol} ${etf_price:.2f})")
 
     # VIX: Try Tradier LIVE first, then yfinance
     vix = get_price("VIX")
@@ -886,10 +907,10 @@ try:
         send_discord_skip_alert("Could not fetch VIX price", run_data)
         raise SystemExit
 
-    log(f"SPX: {spx} | VIX: {vix:.2f}")
+    log(f"{INDEX_CONFIG.code}: {index_price} | VIX: {vix:.2f}")
 
     # Build run_data as we go
-    run_data['spx'] = spx
+    run_data['index_price'] = index_price
     run_data['vix'] = vix
 
     # OPTIMIZATION #5: VIX Floor Filter - don't trade when volatility too low
@@ -905,7 +926,7 @@ try:
     # Formula: SPX * (VIX/100) * sqrt(hours / (252 trading days * 6.5 hours/day))
     HOURS_TO_TP = 2.0
     MIN_EXPECTED_MOVE = 10.0  # Minimum expected move in points to justify trade
-    expected_move_2hr = spx * (vix / 100) * math.sqrt(HOURS_TO_TP / (252 * 6.5))
+    expected_move_2hr = index_price * (vix / 100) * math.sqrt(HOURS_TO_TP / (252 * 6.5))
     log(f"Expected 2hr move: ±{expected_move_2hr:.1f} pts (1σ, 68% prob)")
     run_data['expected_move'] = expected_move_2hr
 
@@ -972,17 +993,17 @@ try:
         log(f"Using PIN OVERRIDE: {pin_price}")
     else:
         log("Calculating real GEX pin from options data...")
-        pin_price = calculate_gex_pin(spx)
+        pin_price = calculate_gex_pin(index_price)
         if pin_price is None:
             log("FATAL: Could not calculate GEX pin — NO TRADE")
             send_discord_skip_alert("GEX pin calculation failed — no trade without real GEX data", run_data)
             raise SystemExit
         log(f"REAL GEX PIN → {pin_price}")
     run_data['pin'] = pin_price
-    run_data['distance'] = abs(spx - pin_price)
+    run_data['distance'] = abs(index_price - pin_price)
 
     # === SMART TRADE SETUP ===
-    setup = get_gex_trade_setup(pin_price, spx, vix)
+    setup = get_gex_trade_setup(pin_price, index_price, vix)
     log(f"Trade setup: {setup['description']} | Confidence: {setup['confidence']}")
     run_data['setup'] = f"{setup['description']} ({setup['confidence']})"
 
@@ -1005,36 +1026,37 @@ try:
             raise SystemExit
         elif distance > 0:
             # SPX above pin - sell calls
-            setup = get_gex_trade_setup(pin_price, spx + 5, vix)  # Nudge to trigger call spread
+            setup = get_gex_trade_setup(pin_price, index_price + 5, vix)  # Nudge to trigger call spread
         else:
             # SPX below pin - sell puts
-            setup = get_gex_trade_setup(pin_price, spx - 5, vix)  # Nudge to trigger put spread
+            setup = get_gex_trade_setup(pin_price, index_price - 5, vix)  # Nudge to trigger put spread
         log(f"Converted to: {setup['description']}")
 
     # === SHORT STRIKE PROXIMITY CHECK ===
-    # Don't enter if short strike is too close to current SPX (gamma risk)
-    MIN_SHORT_DISTANCE = 5  # Minimum points between SPX and short strike
+    # Don't enter if short strike is too close to current index price (gamma risk)
+    # Scale with strike increment: SPX=5pts, NDX=25pts
+    MIN_SHORT_DISTANCE = INDEX_CONFIG.strike_increment  # Minimum points between index and short strike
     strikes = setup['strikes']
     if setup['strategy'] == 'IC':
         call_short, _, put_short, _ = strikes
-        call_distance = call_short - spx
-        put_distance = spx - put_short
+        call_distance = call_short - index_price
+        put_distance = index_price - put_short
         if call_distance < MIN_SHORT_DISTANCE:
-            log(f"Short call {call_short} only {call_distance} pts from SPX {spx} — too close, NO TRADE")
+            log(f"Short call {call_short} only {call_distance} pts from SPX {index_price} — too close, NO TRADE")
             send_discord_skip_alert(f"Short call too close to SPX ({call_distance}pts)", run_data)
             raise SystemExit
         if put_distance < MIN_SHORT_DISTANCE:
-            log(f"Short put {put_short} only {put_distance} pts from SPX {spx} — too close, NO TRADE")
+            log(f"Short put {put_short} only {put_distance} pts from SPX {index_price} — too close, NO TRADE")
             send_discord_skip_alert(f"Short put too close to SPX ({put_distance}pts)", run_data)
             raise SystemExit
     else:
         short_strike = strikes[0]
         if setup['strategy'] == 'CALL':
-            distance = short_strike - spx
+            distance = short_strike - index_price
         else:  # PUT
-            distance = spx - short_strike
+            distance = index_price - short_strike
         if distance < MIN_SHORT_DISTANCE:
-            log(f"Short strike {short_strike} only {distance} pts from SPX {spx} — too close, NO TRADE")
+            log(f"Short strike {short_strike} only {distance} pts from SPX {index_price} — too close, NO TRADE")
             send_discord_skip_alert(f"Short strike too close to SPX ({distance}pts)", run_data)
             raise SystemExit
 
@@ -1055,8 +1077,10 @@ try:
         except (ValueError, TypeError) as e:
             log(f"FATAL: Invalid strike prices for IC: {strikes} - {e}")
             raise SystemExit
-        short_syms = [f"SPXW{exp_short}C{call_short_int:08d}", f"SPXW{exp_short}P{put_short_int:08d}"]
-        long_syms  = [f"SPXW{exp_short}C{call_long_int:08d}",  f"SPXW{exp_short}P{put_long_int:08d}"]
+        short_syms = [INDEX_CONFIG.format_option_symbol(exp_short, 'C', call_short),
+                      INDEX_CONFIG.format_option_symbol(exp_short, 'P', put_short)]
+        long_syms  = [INDEX_CONFIG.format_option_symbol(exp_short, 'C', call_long),
+                      INDEX_CONFIG.format_option_symbol(exp_short, 'P', put_long)]
         log(f"Placing IRON CONDOR: Calls {call_short}/{call_long} | Puts {put_short}/{put_long}")
     else:
         short_strike, long_strike = strikes
@@ -1068,8 +1092,9 @@ try:
             log(f"FATAL: Invalid strike prices for spread: {strikes} - {e}")
             raise SystemExit
         is_call = setup['strategy'] == 'CALL'
-        short_sym = f"SPXW{exp_short}{'C' if is_call else 'P'}{short_strike_int:08d}"
-        long_sym  = f"SPXW{exp_short}{'C' if is_call else 'P'}{long_strike_int:08d}"
+        opt_type = 'C' if is_call else 'P'
+        short_sym = INDEX_CONFIG.format_option_symbol(exp_short, opt_type, short_strike)
+        long_sym  = INDEX_CONFIG.format_option_symbol(exp_short, opt_type, long_strike)
         log(f"Placing {setup['strategy']} SPREAD {short_strike}/{long_strike}{'C' if is_call else 'P'}")
 
     # === EXPECTED CREDIT FETCHING (must happen BEFORE spread quality check) ===
@@ -1106,27 +1131,15 @@ try:
             send_discord_skip_alert("Bid/ask spreads too wide (high slippage risk)", run_data)
             raise SystemExit
 
-    # FIX #3: ABSOLUTE MINIMUM CREDIT (prevents tiny premiums with no buffer)
-    ABSOLUTE_MIN_CREDIT = 1.00  # Never trade below $1.00 regardless of time
+    # === MINIMUM CREDIT CHECK (index-aware, scales automatically) ===
+    # FIX 2026-01-11: Use INDEX_CONFIG.get_min_credit() for proper scaling
+    # SPX: $0.40-$0.65 (realistic 0DTE), NDX: $2.00-$3.25 (5× SPX)
+    # Previous hardcoded values were based on weekly options, not 0DTE
+    min_credit = INDEX_CONFIG.get_min_credit(now_et.hour)
 
-    if expected_credit < ABSOLUTE_MIN_CREDIT:
-        log(f"Credit ${expected_credit:.2f} below absolute minimum ${ABSOLUTE_MIN_CREDIT:.2f} — NO TRADE")
-        send_discord_skip_alert(f"Credit ${expected_credit:.2f} below absolute minimum ${ABSOLUTE_MIN_CREDIT:.2f}", run_data)
-        raise SystemExit
-
-    # === MINIMUM CREDIT CHECK (scales by time of day) ===
-    # FIX 2026-01-10: Reverted to original levels (Jan 8 increases were too strict - 0 trades in 3 weeks)
-    # Later in day = thinner premiums = need higher minimum to justify risk
-    if now_et.hour < 11:
-        MIN_CREDIT = 1.25   # Before 11 AM: $1.25 (REVERTED from $1.50)
-    elif now_et.hour < 13:
-        MIN_CREDIT = 1.50   # 11 AM-1 PM: $1.50 (REVERTED from $1.75-$2.25)
-    else:
-        MIN_CREDIT = 2.00   # After 1 PM: $2.00 (REVERTED from $3.00)
-
-    if expected_credit < MIN_CREDIT:
-        log(f"Credit ${expected_credit:.2f} below time-based minimum ${MIN_CREDIT:.2f} for {now_et.strftime('%H:%M')} ET — NO TRADE")
-        send_discord_skip_alert(f"Credit ${expected_credit:.2f} below ${MIN_CREDIT:.2f} minimum for {now_et.strftime('%H:%M')} ET", run_data)
+    if expected_credit < min_credit:
+        log(f"Credit ${expected_credit:.2f} below minimum ${min_credit:.2f} for {now_et.strftime('%H:%M')} ET ({INDEX_CONFIG.code}) — NO TRADE")
+        send_discord_skip_alert(f"Credit ${expected_credit:.2f} below ${min_credit:.2f} minimum for {now_et.strftime('%H:%M')} ET ({INDEX_CONFIG.code})", run_data)
         raise SystemExit
 
     dollar_credit = expected_credit * 100
@@ -1149,7 +1162,7 @@ try:
 
     # === CRITICAL FIX-1: CHECK POSITION LIMIT *BEFORE* PLACING ORDER ===
     # This prevents orphaned positions (order live but not tracked)
-    ORDERS_FILE = "/root/gamma/data/orders_paper.json" if mode == "PAPER" else "/root/gamma/data/orders_live.json"
+    ORDERS_FILE = "/gamma-scalper/data/orders_paper.json" if mode == "PAPER" else "/gamma-scalper/data/orders_live.json"
 
     # Load existing orders to check position limit
     existing_orders = []
@@ -1188,7 +1201,7 @@ try:
 
     # === REAL ENTRY ORDER ===
     entry_data = {
-        "class": "multileg", "symbol": "SPXW",
+        "class": "multileg", "symbol": INDEX_CONFIG.option_root,
         "type": "credit", "price": limit_price, "duration": "day", "tag": "GEXENTRY",
         "option_requirement": "aon",  # CRITICAL FIX-3: All-or-None (prevents partial fills / naked positions)
         "side[0]": "sell_to_open", "quantity[0]": position_size,
@@ -1377,16 +1390,16 @@ try:
     # Calculate entry distance (OTM distance at entry) for progressive hold strategy
     if setup['strategy'] == 'CALL':
         # CALL spread: short strike is lower, we profit if SPX stays below
-        entry_distance = min(strikes) - spx
+        entry_distance = min(strikes) - index_price
     elif setup['strategy'] == 'PUT':
         # PUT spread: short strike is higher, we profit if SPX stays above
-        entry_distance = spx - max(strikes)
+        entry_distance = index_price - max(strikes)
     else:  # IC
         # Iron condor: strikes = [call_short, call_long, put_short, put_long]
         # Distance to nearest short strike (call_short above, put_short below)
         call_short = strikes[0]
         put_short = strikes[2]
-        entry_distance = min(call_short - spx, spx - put_short)
+        entry_distance = min(call_short - index_price, index_price - put_short)
 
     order_data = {
         "order_id": order_id,
@@ -1403,7 +1416,8 @@ try:
         "trailing_stop_active": False,
         "best_profit_pct": 0,
         "entry_distance": entry_distance,
-        "spx_entry": spx,
+        "index_entry": index_price,
+        "index_code": INDEX_CONFIG.code,  # Track which index this trade is for
         "vix_entry": vix,
         "position_size": position_size,  # Number of contracts (autoscaling)
         "account_balance": account_balance  # Track balance at entry for P/L calculation
