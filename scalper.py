@@ -606,7 +606,7 @@ MAX_DAILY_POSITIONS = 3  # Limit concurrent open positions to prevent unbounded 
 # ========== AUTOSCALING CONFIGURATION (2026-01-10) ==========
 AUTOSCALING_ENABLED = True          # Enable Half-Kelly position sizing
 STARTING_CAPITAL = 20000             # Starting account balance ($20k for conservative start)
-MAX_CONTRACTS_PER_TRADE = 3          # Conservative max (2-3 contracts for $10k-25k accounts)
+MAX_CONTRACTS_PER_TRADE = 10         # Maximum contracts (Kelly formula scales from 1-10 as account grows)
 STOP_LOSS_PER_CONTRACT = 150         # Max loss per contract (from backtest data)
 ACCOUNT_BALANCE_FILE = "/gamma-scalper/data/account_balance.json"  # Track balance across restarts
 
@@ -844,8 +844,9 @@ def get_gex_trade_setup(pin_price, index_price, vix):
     Uses shared module: core.gex_strategy (single source of truth)
     This ensures backtest and live scalper use IDENTICAL logic.
     """
-    # Use core module (GEXTradeSetup dataclass) with INDEX_CONFIG
-    setup = core_get_gex_trade_setup(pin_price, index_price, vix, INDEX_CONFIG)
+    # Use core module (GEXTradeSetup dataclass) with default vix_threshold=20.0
+    # BUGFIX (2026-01-11): Removed INDEX_CONFIG parameter (was incorrect type)
+    setup = core_get_gex_trade_setup(pin_price, index_price, vix)
 
     # Convert dataclass to dict for backwards compatibility
     return {

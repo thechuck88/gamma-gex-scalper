@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
 """
-backtest_ndx.py — NDX (Nasdaq-100) GEX Scalper Backtest
+backtest_spx.py — SPX (S&P 500) GEX Scalper Backtest
 
-Simulates the GEX scalper strategy on NDX index using QQQ as proxy.
+Simulates the GEX scalper strategy on SPX index using SPY as proxy.
 
-NDX-Specific Parameters:
-  - ETF Proxy: QQQ (Nasdaq-100 ETF)
-  - Multiplier: 42.5 (QQQ * 42.5 ≈ NDX)
-  - Spread Width: 25 points (vs 5 for SPX)
-  - Strike Rounding: Nearest 25 (vs 5 for SPX)
-  - Higher premiums due to tech volatility
+SPX-Specific Parameters:
+  - ETF Proxy: SPY (S&P 500 ETF)
+  - Multiplier: 10 (SPY * 10 ≈ SPX)
+  - Spread Width: 5 points (vs 25 for SPX)
+  - Strike Rounding: Nearest 5 (vs 25 for SPX)
+  - Lower premiums than SPX due to lower volatility
 
 Assumptions/Approximations:
-  - GEX Pin: Uses previous close rounded to nearest 25 (simplified proxy)
+  - GEX Pin: Uses previous close rounded to nearest 5 (simplified proxy)
   - Entry Credit: Estimated from VIX using empirical formula
   - Entry Time: Assumes entry at 10:00 AM ET (market open + 30 min)
   - Exit: TP/SL or market close at 3:50 PM
-  - NDX Close: Used to determine if spread expired ITM/OTM
+  - SPX Close: Used to determine if spread expired ITM/OTM
 
 Usage:
-  python backtest_ndx.py                        # Run backtest (180 days)
-  python backtest_ndx.py --days 1260            # 5-year backtest
-  python backtest_ndx.py --days 1260 --auto-scale  # With autoscaling
-  python backtest_ndx.py --monte-carlo 10000    # Monte Carlo simulation
+  python backtest_spx.py                        # Run backtest (180 days)
+  python backtest_spx.py --days 756             # 3-year backtest
+  python backtest_spx.py --days 756 --auto-scale --realistic  # With autoscaling
+  python backtest_spx.py --monte-carlo 10000    # Monte Carlo simulation
 
 Author: Claude + Human collaboration
 """
@@ -36,8 +36,8 @@ from scipy.stats import norm
 
 # Import shared GEX strategy logic (single source of truth)
 from core.gex_strategy import get_gex_trade_setup as core_get_gex_trade_setup
-# NDX uses 25-point spreads and rounding
-# from core.gex_strategy import round_to_5, get_spread_width
+# SPX uses 5-point spreads and rounding
+from core.gex_strategy import round_to_5, get_spread_width
 
 # ============================================================================
 #                           STRATEGY PARAMETERS
@@ -123,10 +123,7 @@ def is_excluded_day(date_str):
 # ============================================================================
 
 # round_to_5 is imported from core.gex_strategy
-
-def round_to_25(price):
-    """Round to nearest 25 for GEX pin approximation."""
-    return round(price / 25) * 25
+# SPX uses 5-point rounding for strikes (already imported above)
 
 def estimate_fill_probability(vix, entry_credit, hours_after_open):
     """
@@ -262,12 +259,12 @@ def estimate_spread_credit(spx, short_strike, long_strike, vix, is_call=True, ho
     credit = short_price - long_price
     return max(credit, 0.05)  # Minimum credit floor
 
-def get_gex_trade_setup(pin_price, ndx_price, vix):
+def get_gex_trade_setup(pin_price, spx_price, vix):
     """
-    NDX-specific GEX trade setup (25-point spreads, not 5-point like SPX)
+    SPX-specific GEX trade setup (5-point spreads, not 25-point like SPX)
 
-    Creates credit spreads based on NDX price relative to GEX pin level.
-    Uses 25-point wide spreads (vs 5-point for SPX).
+    Creates credit spreads based on SPX price relative to GEX pin level.
+    Uses 5-point wide spreads (vs 25-point for SPX).
     """
     # Skip if VIX >= threshold
     if vix >= VIX_MAX_THRESHOLD:
@@ -281,12 +278,12 @@ def get_gex_trade_setup(pin_price, ndx_price, vix):
             'skip_reason': f'VIX {vix:.1f} >= {VIX_MAX_THRESHOLD}'
         }
 
-    # NDX spread configuration
-    SPREAD_WIDTH = 25  # 25-point spreads for NDX (vs 5 for SPX)
-    STRIKE_ROUND = 25   # Round to nearest 25
+    # SPX spread configuration
+    SPREAD_WIDTH = 5   # 5-point spreads for SPX (vs 25 for SPX)
+    STRIKE_ROUND = 5   # Round to nearest 5
 
     # Determine direction based on price vs pin
-    distance_from_pin = ndx_price - pin_price
+    distance_from_pin = spx_price - pin_price
 
     # If price is above pin, sell call spread (bearish)
     if abs(distance_from_pin) > SPREAD_WIDTH:
@@ -295,18 +292,18 @@ def get_gex_trade_setup(pin_price, ndx_price, vix):
 
         if distance_from_pin > 0:
             # Price above pin - sell call spread
-            short_strike = round_to_25(ndx_price + (SPREAD_WIDTH * 2))
+            short_strike = round_to_5(spx_price + (SPREAD_WIDTH * 2))
             long_strike = short_strike + SPREAD_WIDTH
             strategy = "CALL"
             direction = "bearish"
-            description = f"Price {int(ndx_price)} above pin {int(pin_price)} - sell call spread"
+            description = f"Price {int(spx_price)} above pin {int(pin_price)} - sell call spread"
         else:
             # Price below pin - sell put spread
-            short_strike = round_to_25(ndx_price - (SPREAD_WIDTH * 2))
+            short_strike = round_to_5(spx_price - (SPREAD_WIDTH * 2))
             long_strike = short_strike - SPREAD_WIDTH
             strategy = "PUT"
             direction = "bullish"
-            description = f"Price {int(ndx_price)} below pin {int(pin_price)} - sell put spread"
+            description = f"Price {int(spx_price)} below pin {int(pin_price)} - sell put spread"
 
         strikes = [short_strike, long_strike]
     else:
@@ -316,15 +313,15 @@ def get_gex_trade_setup(pin_price, ndx_price, vix):
         direction = "neutral"
 
         # Call spread (above pin)
-        call_short = round_to_25(pin_price + (SPREAD_WIDTH * 2))
+        call_short = round_to_5(pin_price + (SPREAD_WIDTH * 2))
         call_long = call_short + SPREAD_WIDTH
 
         # Put spread (below pin)
-        put_short = round_to_25(pin_price - (SPREAD_WIDTH * 2))
+        put_short = round_to_5(pin_price - (SPREAD_WIDTH * 2))
         put_long = put_short - SPREAD_WIDTH
 
         strikes = [call_short, call_long, put_short, put_long]
-        description = f"Price {int(ndx_price)} near pin {int(pin_price)} - iron condor"
+        description = f"Price {int(spx_price)} near pin {int(pin_price)} - iron condor"
 
     return {
         'strategy': strategy,
@@ -583,7 +580,7 @@ def run_backtest(days=180, realistic=False, auto_scale=False):
     """Run the GEX scalper backtest."""
 
     print("=" * 70)
-    print("NDX GEX SCALPER BACKTEST")
+    print("SPX GEX SCALPER BACKTEST")
     print(f"Period: Last {days} trading days")
     if realistic:
         print("MODE: REALISTIC (slippage, 10% SL hits, 2% gap risk, limit order fills)")
@@ -596,54 +593,54 @@ def run_backtest(days=180, realistic=False, auto_scale=False):
     end_date = datetime.datetime.now()
     start_date = end_date - datetime.timedelta(days=int(days * 1.5))  # Extra buffer for weekends
 
-    qqq = yf.download("QQQ", start=start_date, end=end_date, progress=False)
+    spy = yf.download("SPY", start=start_date, end=end_date, progress=False)
     vix = yf.download("^VIX", start=start_date, end=end_date, progress=False)
 
-    if qqq.empty or vix.empty:
+    if spy.empty or vix.empty:
         print("ERROR: Could not fetch historical data")
         return
 
     # Handle multi-level columns from yfinance
-    if isinstance(qqq.columns, pd.MultiIndex):
-        qqq.columns = qqq.columns.get_level_values(0)
+    if isinstance(spy.columns, pd.MultiIndex):
+        spy.columns = spy.columns.get_level_values(0)
     if isinstance(vix.columns, pd.MultiIndex):
         vix.columns = vix.columns.get_level_values(0)
 
-    # Convert QQQ to NDX (multiply by 42.5)
-    qqq['NDX_Open'] = qqq['Open'] * 42.5
-    qqq['NDX_High'] = qqq['High'] * 42.5
-    qqq['NDX_Low'] = qqq['Low'] * 42.5
-    qqq['NDX_Close'] = qqq['Close'] * 42.5
+    # Convert SPY to SPX (multiply by 10)
+    spy['SPX_Open'] = spy['Open'] * 10
+    spy['SPX_High'] = spy['High'] * 10
+    spy['SPX_Low'] = spy['Low'] * 10
+    spy['SPX_Close'] = spy['Close'] * 10
 
     # Merge VIX
-    qqq['VIX'] = vix['Close']
+    spy['VIX'] = vix['Close']
 
     # Calculate IVR (52-week rank)
-    qqq['VIX_52w_high'] = qqq['VIX'].rolling(window=252, min_periods=50).max()
-    qqq['VIX_52w_low'] = qqq['VIX'].rolling(window=252, min_periods=50).min()
-    qqq['IVR'] = ((qqq['VIX'] - qqq['VIX_52w_low']) / (qqq['VIX_52w_high'] - qqq['VIX_52w_low'])) * 100
-    qqq['IVR'] = qqq['IVR'].fillna(50)  # Default to 50 if not enough history
+    spy['VIX_52w_high'] = spy['VIX'].rolling(window=252, min_periods=50).max()
+    spy['VIX_52w_low'] = spy['VIX'].rolling(window=252, min_periods=50).min()
+    spy['IVR'] = ((spy['VIX'] - spy['VIX_52w_low']) / (spy['VIX_52w_high'] - spy['VIX_52w_low'])) * 100
+    spy['IVR'] = spy['IVR'].fillna(50)  # Default to 50 if not enough history
 
     # Day of week (0=Mon, 4=Fri)
-    qqq['day_of_week'] = qqq.index.dayofweek
-    qqq['day_name'] = qqq.index.day_name()
+    spy['day_of_week'] = spy.index.dayofweek
+    spy['day_name'] = spy.index.day_name()
 
     # Gap size (open vs previous close)
-    qqq['prev_close'] = qqq['NDX_Close'].shift(1)
-    qqq['gap_pct'] = ((qqq['NDX_Open'] - qqq['prev_close']) / qqq['prev_close'] * 100).abs()
+    spy['prev_close'] = spy['SPX_Close'].shift(1)
+    spy['gap_pct'] = ((spy['SPX_Open'] - spy['prev_close']) / spy['prev_close'] * 100).abs()
 
     # 20-day SMA trend
-    qqq['sma20'] = qqq['NDX_Close'].rolling(window=20).mean()
-    qqq['above_sma20'] = qqq['NDX_Open'] > qqq['sma20']
+    spy['sma20'] = spy['SPX_Close'].rolling(window=20).mean()
+    spy['above_sma20'] = spy['SPX_Open'] > spy['sma20']
 
     # Previous day range (ATR proxy)
-    qqq['prev_range'] = (qqq['NDX_High'].shift(1) - qqq['NDX_Low'].shift(1))
-    qqq['avg_range'] = qqq['prev_range'].rolling(window=10).mean()
-    qqq['range_ratio'] = qqq['prev_range'] / qqq['avg_range']  # >1 = high range day
+    spy['prev_range'] = (spy['SPX_High'].shift(1) - spy['SPX_Low'].shift(1))
+    spy['avg_range'] = spy['prev_range'].rolling(window=10).mean()
+    spy['range_ratio'] = spy['prev_range'] / spy['avg_range']  # >1 = high range day
 
     # Consecutive up/down days
-    qqq['daily_return'] = qqq['NDX_Close'].pct_change()
-    qqq['up_day'] = qqq['daily_return'] > 0
+    spy['daily_return'] = spy['SPX_Close'].pct_change()
+    spy['up_day'] = spy['daily_return'] > 0
 
     # Calculate consecutive days
     def count_consecutive(series):
@@ -661,8 +658,8 @@ def run_backtest(days=180, realistic=False, auto_scale=False):
             prev_val = val
         return result
 
-    qqq['consec_days'] = count_consecutive(qqq['up_day'].tolist())
-    qqq['consec_days'] = qqq['consec_days'].shift(1)  # Use previous day's streak
+    spy['consec_days'] = count_consecutive(spy['up_day'].tolist())
+    spy['consec_days'] = spy['consec_days'].shift(1)  # Use previous day's streak
 
     # OPEX week (3rd Friday of month)
     def is_opex_week(date):
@@ -674,7 +671,7 @@ def run_backtest(days=180, realistic=False, auto_scale=False):
         opex_monday = third_friday - pd.Timedelta(days=4)
         return opex_monday <= date <= third_friday
 
-    qqq['opex_week'] = [is_opex_week(d) for d in qqq.index]
+    spy['opex_week'] = [is_opex_week(d) for d in spy.index]
 
     # RSI (14-period)
     def calculate_rsi(prices, period=14):
@@ -687,19 +684,19 @@ def run_backtest(days=180, realistic=False, auto_scale=False):
         rsi = 100 - (100 / (1 + rs))
         return rsi
 
-    qqq['RSI'] = calculate_rsi(qqq['NDX_Close'], 14)
-    qqq['RSI'] = qqq['RSI'].fillna(50)
+    spy['RSI'] = calculate_rsi(spy['SPX_Close'], 14)
+    spy['RSI'] = spy['RSI'].fillna(50)
 
-    spy = qqq.dropna()
+    spy = spy.dropna()
 
     # Limit to requested days
-    spy = qqq.tail(days)
+    spy = spy.tail(days)
 
-    print(f"Loaded {len(qqq)} trading days")
-    print(f"Date range: {qqq.index[0].strftime('%Y-%m-%d')} to {qqq.index[-1].strftime('%Y-%m-%d')}")
-    print(f"NDX range: {qqq['NDX_Low'].min():.0f} - {qqq['NDX_High'].max():.0f}")
-    print(f"VIX range: {qqq['VIX'].min():.1f} - {qqq['VIX'].max():.1f}")
-    print(f"IVR range: {qqq['IVR'].min():.0f} - {qqq['IVR'].max():.0f}")
+    print(f"Loaded {len(spy)} trading days")
+    print(f"Date range: {spy.index[0].strftime('%Y-%m-%d')} to {spy.index[-1].strftime('%Y-%m-%d')}")
+    print(f"SPX range: {spy['SPX_Low'].min():.0f} - {spy['SPX_High'].max():.0f}")
+    print(f"VIX range: {spy['VIX'].min():.1f} - {spy['VIX'].max():.1f}")
+    print(f"IVR range: {spy['IVR'].min():.0f} - {spy['IVR'].max():.0f}")
 
     # Run simulation
     print("\nRunning simulation...")
@@ -734,17 +731,17 @@ def run_backtest(days=180, realistic=False, auto_scale=False):
         # Check for excluded days
         if date_str in FOMC_DATES:
             skipped_days['fomc'] += 1
-            prev_close = row['NDX_Close']
+            prev_close = row['SPX_Close']
             continue
         if date_str in SHORT_DAYS_SET:
             skipped_days['short'] += 1
-            prev_close = row['NDX_Close']
+            prev_close = row['SPX_Close']
             continue
 
-        spx_open = row['NDX_Open']
-        spx_high = row['NDX_High']
-        spx_low = row['NDX_Low']
-        spx_close = row['NDX_Close']
+        spx_open = row['SPX_Open']
+        spx_high = row['SPX_High']
+        spx_low = row['SPX_Low']
+        spx_close = row['SPX_Close']
 
         # BUG FIX (2025-12-27): Acknowledge VIX data limitation
         # LIMITATION: Using daily VIX for all 5 entry times (9:36am, 10am, 11am, 12pm, 1pm)
@@ -769,9 +766,9 @@ def run_backtest(days=180, realistic=False, auto_scale=False):
         # IMPACT: All 5 entry times use same stale pin (up to 3.5 hours old for 1pm entry)
         # Approximate GEX pin using previous close rounded to 25
         if prev_close is None:
-            pin_price = round_to_25(spx_open)
+            pin_price = round_to_5(spx_open)
         else:
-            pin_price = round_to_25(prev_close)  # Previous day's close - applies to all entry times
+            pin_price = round_to_5(prev_close)  # Previous day's close - applies to all entry times
 
         prev_close = spx_close
 
@@ -1297,7 +1294,7 @@ def run_backtest(days=180, realistic=False, auto_scale=False):
     print(f"Losing Days:      {len(negative_days)}")
 
     # Save detailed results
-    output_file = "/root/gamma/data/backtest_ndx_results.csv"
+    output_file = "/root/gamma/data/backtest_spx_results.csv"
     df.to_csv(output_file, index=False)
     print(f"\nDetailed results saved to: {output_file}")
 
