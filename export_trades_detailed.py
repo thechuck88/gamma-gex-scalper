@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""
+Export detailed trade data to CSV for review
+
+Creates a CSV file with all trade details including:
+- Entry/exit times
+- Strikes
+- Credits
+- P/L
+- Exit reasons
+- Minute-by-minute price tracking
+"""
+
+import sys
+import csv
+from datetime import datetime
+
+sys.path.insert(0, '/root/gamma')
+from backtest_report import run_backtest_silent
+
+
+def export_trades_to_csv(test_date, output_file):
+    """Export all trades to CSV with detailed information."""
+
+    # Run backtests
+    print(f"Running backtest for {test_date}...")
+    spx_trades = run_backtest_silent(test_date, 'SPX')
+    ndx_trades = run_backtest_silent(test_date, 'NDX')
+
+    all_trades = spx_trades + ndx_trades
+
+    if not all_trades:
+        print(f"No trades found for {test_date}")
+        return
+
+    # Sort by entry time
+    all_trades.sort(key=lambda t: t['entry_time'])
+
+    # Write to CSV
+    with open(output_file, 'w', newline='') as f:
+        writer = csv.writer(f)
+
+        # Header
+        writer.writerow([
+            'Trade_Num',
+            'Index',
+            'Entry_Time_ET',
+            'Exit_Time_ET',
+            'Duration_Min',
+            'Strategy',
+            'Strikes',
+            'Entry_Credit',
+            'Exit_Value',
+            'PL_Dollars',
+            'PL_Percent',
+            'Exit_Reason',
+            'Best_Profit_Pct',
+            'Pin_Strike'
+        ])
+
+        # Write trades
+        for i, trade in enumerate(all_trades, 1):
+            # Convert times to ET for display
+            entry_et = trade['entry_time'].replace(tzinfo=None)  # Already converted in report
+            exit_et = trade['exit_time'].replace(tzinfo=None)
+
+            writer.writerow([
+                i,
+                trade['index'],
+                entry_et.strftime('%Y-%m-%d %H:%M:%S'),
+                exit_et.strftime('%Y-%m-%d %H:%M:%S'),
+                f"{trade['duration_min']:.1f}",
+                trade['strategy'],
+                trade['strikes'],
+                f"{trade['entry_credit']:.2f}",
+                f"{trade['exit_value']:.2f}",
+                f"{trade['pnl_dollars']:.2f}",
+                f"{trade['pnl_pct']:.1f}",
+                trade['exit_reason'],
+                f"{trade['best_profit_pct']:.1f}",
+                f"{trade['pin_strike']:.0f}"
+            ])
+
+    print(f"\n✓ Exported {len(all_trades)} trades to {output_file}")
+
+    # Summary
+    winners = [t for t in all_trades if t['pnl_dollars'] > 0]
+    losers = [t for t in all_trades if t['pnl_dollars'] <= 0]
+    total_pl = sum(t['pnl_dollars'] for t in all_trades)
+
+    print(f"\nSummary:")
+    print(f"  Total Trades: {len(all_trades)}")
+    print(f"  Winners: {len(winners)} ({len(winners)/len(all_trades)*100:.1f}%)")
+    print(f"  Losers: {len(losers)}")
+    print(f"  Total P/L: ${total_pl:+,.2f}")
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: python3 export_trades_detailed.py 2026-01-12 [output.csv]")
+        sys.exit(1)
+
+    test_date = datetime.strptime(sys.argv[1], '%Y-%m-%d').date()
+
+    if len(sys.argv) > 2:
+        output_file = sys.argv[2]
+    else:
+        output_file = f"/root/gamma/trades_{test_date.strftime('%Y%m%d')}.csv"
+
+    export_trades_to_csv(test_date, output_file)
+
+
+if __name__ == '__main__':
+    main()

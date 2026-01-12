@@ -1,0 +1,148 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                 GAMMA BACKTEST DETAILED TRADE REPORT                         ║
+║                        January 12, 2026                                      ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ TRADE #1: SPX PUT SPREAD                                         ✅ +$215    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Time:      9:36 AM → 9:51 AM (15 minutes)                                    │
+│ Strikes:   6950/6940P (10-point spread)                                      │
+│ GEX Pin:   6980 (SPX 30 pts below pin - bullish setup)                      │
+│                                                                              │
+│ Entry:     Sold spread for $4.25 credit                                     │
+│ Exit:      Bought back at $2.10                                             │
+│ Result:    +$215 profit (+51% return)                                       │
+│                                                                              │
+│ Exit:      PROFIT TARGET (hit 50% profit goal)                              │
+│ Peak:      51% (held to target without pullback)                            │
+│                                                                              │
+│ Notes:     Perfect execution. SPX moved toward pin, spread decayed as       │
+│            expected. Locked in profit at target.                            │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ TRADE #2: NDX PUT SPREAD                                         ✅ +$110    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Time:      9:36 AM → 9:44 AM (8 minutes)                                     │
+│ Strikes:   25620/25600P (20-point spread)                                    │
+│ GEX Pin:   25820 (NDX 180 pts below pin - strong bullish setup)             │
+│                                                                              │
+│ Entry:     Sold spread for $5.10 credit                                     │
+│ Exit:      Bought back at $4.00                                             │
+│ Result:    +$110 profit (+22% return)                                       │
+│                                                                              │
+│ Exit:      TRAILING STOP (locked in gains)                                  │
+│ Peak:      35% (peaked at 35%, trailing stop secured 22%)                   │
+│                                                                              │
+│ Notes:     Fast mover. Price surged toward pin reaching 35% profit, then    │
+│            pulled back. Trailing stop protected most of the gains.          │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ TRADE #3: SPX PUT SPREAD                                          ❌ -$45    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Time:      10:00 AM → 10:05 AM (5 minutes)                                   │
+│ Strikes:   6955/6945P (10-point spread)                                      │
+│ GEX Pin:   6985 (SPX 18 pts below pin)                                      │
+│                                                                              │
+│ Entry:     Sold spread for $2.35 credit                                     │
+│ Exit:      Bought back at $2.80                                             │
+│ Result:    -$45 loss (-19% return)                                          │
+│                                                                              │
+│ Exit:      STOP LOSS (10% hard stop triggered)                              │
+│ Peak:      2% (briefly profitable, then reversed sharply)                   │
+│                                                                              │
+│ Notes:     Whipsaw. Showed small profit initially, then price dropped       │
+│            hard. Stop loss contained damage to -$45.                        │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ TRADE #4: SPX PUT SPREAD                                          ❌ -$65    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Time:      10:30 AM → 10:35 AM (5 minutes)                                   │
+│ Strikes:   6955/6945P (10-point spread)                                      │
+│ GEX Pin:   6980 (SPX 16 pts below pin)                                      │
+│                                                                              │
+│ Entry:     Sold spread for $2.45 credit                                     │
+│ Exit:      Bought back at $3.10                                             │
+│ Result:    -$65 loss (-27% return)                                          │
+│                                                                              │
+│ Exit:      STOP LOSS (10% hard stop triggered)                              │
+│ Peak:      0% (NEVER PROFITABLE - immediate adverse move)                   │
+│                                                                              │
+│ Notes:     Bad timing. Price moved against position from the start.         │
+│            Worst trade of the day, but stop loss limited damage.            │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ TRADE #5: SPX PUT SPREAD                                         ✅ +$105    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Time:      11:00 AM → 11:16 AM (16 minutes)                                  │
+│ Strikes:   6955/6945P (10-point spread)                                      │
+│ GEX Pin:   6980 (SPX 16 pts below pin)                                      │
+│                                                                              │
+│ Entry:     Sold spread for $2.02 credit                                     │
+│ Exit:      Bought back at $0.98                                             │
+│ Result:    +$105 profit (+52% return)                                       │
+│                                                                              │
+│ Exit:      PROFIT TARGET (hit 50% profit goal)                              │
+│ Peak:      52% (smooth ride to target)                                      │
+│                                                                              │
+│ Notes:     Solid winner. Market stabilized, price drifted toward pin.       │
+│            Classic mean reversion to GEX pin behavior.                      │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                            PERFORMANCE SUMMARY                               ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────┬────────────────────────────────────────┐
+│ TOTAL TRADES                   5    │ WIN RATE              60.0% (3W/2L)   │
+│ WINNERS                        3    │ PROFIT FACTOR         3.91            │
+│ LOSERS                         2    │ AVG P/L PER TRADE     +$64            │
+└─────────────────────────────────────┴────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ WINNERS (3 trades)                                                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ • Trade #1: +$215 (51% profit, 15 min)                                     │
+│ • Trade #2: +$110 (22% profit, 8 min)                                      │
+│ • Trade #5: +$105 (52% profit, 16 min)                                     │
+│                                                                             │
+│ Total Winners: +$430                                                        │
+│ Avg Winner: +$143 over 13 minutes                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ LOSERS (2 trades)                                                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ • Trade #3: -$45 (19% loss, 5 min)                                         │
+│ • Trade #4: -$65 (27% loss, 5 min)                                         │
+│                                                                             │
+│ Total Losers: -$110                                                         │
+│ Avg Loser: -$55 over 5 minutes                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ NET P/L:  +$320.00                                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                          TRADES FILTERED OUT                                 ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+7 additional trades were SKIPPED by production credit threshold filters:
+
+• 11:30 AM: $1.27 credit (required $1.75)
+• 12:00 PM: $0.68 credit (required $1.75)
+• 12:30 PM: $0.60 credit (required $2.25)
+• 1:00 PM:  $0.45 credit (required $2.25)
+• 1:30 PM:  $0.15 credit (required $3.00)
+• 2:00 PM:  $0.15 credit (required $3.00)
+• 2:30 PM:  $0.10 credit (required $3.00)
+
+These had poor risk/reward (tiny credits vs $1,000 max loss).
+The credit filters prevented likely losers.
+
+════════════════════════════════════════════════════════════════════════════════
