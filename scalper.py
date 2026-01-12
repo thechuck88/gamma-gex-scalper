@@ -919,8 +919,8 @@ def get_gex_trade_setup(pin_price, index_price, vix):
     This ensures backtest and live scalper use IDENTICAL logic.
     """
     # Use core module (GEXTradeSetup dataclass) with default vix_threshold=20.0
-    # BUGFIX (2026-01-11): Removed INDEX_CONFIG parameter (was incorrect type)
-    setup = core_get_gex_trade_setup(pin_price, index_price, vix)
+    # BUGFIX (2026-01-12): Re-added INDEX_CONFIG parameter (required by core function)
+    setup = core_get_gex_trade_setup(pin_price, index_price, vix, INDEX_CONFIG)
 
     # Convert dataclass to dict for backwards compatibility
     return {
