@@ -292,8 +292,10 @@ def simulate_trade(entry_time, prices, strategy, index_symbol):
             exit_value = current_value
             break
 
-        # Check EOD (3:30 PM)
-        if check_time.time() >= dt_time(15, 30):
+        # Check EOD (3:30 PM ET) - MUST convert from UTC to ET
+        check_time_utc = pytz.UTC.localize(check_time)
+        check_time_et = check_time_utc.astimezone(ET)
+        if check_time_et.time() >= dt_time(15, 30):
             exit_reason = 'EOD_CLOSE'
             exit_time = check_time
             exit_value = current_value
