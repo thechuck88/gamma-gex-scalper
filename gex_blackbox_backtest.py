@@ -25,6 +25,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 
 sys.path.insert(0, '/root/gamma')
+from gex_blackbox_recorder import get_optimized_connection
 
 DB_PATH = "/root/gamma/data/gex_blackbox.db"
 
@@ -35,7 +36,7 @@ def get_snapshots(index_symbol, start_date=None, end_date=None):
 
     Returns: List of dicts with snapshot data
     """
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_optimized_connection()
     cursor = conn.cursor()
 
     if start_date and end_date:
@@ -97,7 +98,7 @@ def get_snapshots(index_symbol, start_date=None, end_date=None):
 
 def get_peaks_for_snapshot(index_symbol, timestamp):
     """Get top 3 peaks for a snapshot."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_optimized_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -285,7 +286,7 @@ def run_backtest(index_symbol, start_date=None, end_date=None):
 
 def analyze_data_coverage(index_symbol):
     """Analyze what data is available."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_optimized_connection()
     cursor = conn.cursor()
 
     cursor.execute("""

@@ -17,7 +17,7 @@ Note: SPX uses $5 strike increments, NDX uses $10 strike increments
 
 import sys
 import sqlite3
-from datetime import datetime, date, time as dt_time
+from datetime import datetime, date, time as dt_time, timedelta
 from collections import defaultdict
 import pytz
 
@@ -57,7 +57,6 @@ def get_gex_peaks_for_time(index_symbol, timestamp):
     cursor = conn.cursor()
 
     # Get peaks within ±2 minutes of timestamp
-    from datetime import timedelta
     start_time = (timestamp - timedelta(minutes=2)).strftime('%Y-%m-%d %H:%M:%S')
     end_time = (timestamp + timedelta(minutes=2)).strftime('%Y-%m-%d %H:%M:%S')
 
@@ -448,8 +447,6 @@ def run_backtest_for_date(test_date, index_symbol='SPX'):
 
 
 def main():
-    from datetime import timedelta
-
     # Parse arguments: [date|--all] [SPX|NDX|ALL]
     test_date = date.today()
     index_symbols = ['SPX']
@@ -486,5 +483,4 @@ def main():
 
 
 if __name__ == '__main__':
-    from datetime import timedelta
     main()

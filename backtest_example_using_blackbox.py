@@ -12,6 +12,11 @@ Shows how to:
 import sqlite3
 from datetime import datetime, timedelta
 
+# Import optimized connection
+import sys
+sys.path.insert(0, '/root/gamma')
+from gex_blackbox_recorder import get_optimized_connection
+
 DB_PATH = "/root/gamma/data/gex_blackbox.db"
 
 
@@ -23,7 +28,7 @@ def backtest_single_trade_example(trade_date, entry_time_str):
         trade_date: '2026-01-13'
         entry_time_str: '09:36:00'
     """
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_optimized_connection()
     cursor = conn.cursor()
 
     entry_datetime = f"{trade_date} {entry_time_str}"
