@@ -560,18 +560,52 @@ def calculate_gex_pin(index_price):
             log("No GEX data calculated")
             return None
 
-        # Find strikes near current price with highest positive GEX
-        # Use INDEX_CONFIG.far_max for appropriate distance (50 for SPX, 250 for NDX)
-        near_strikes = [(s, g) for s, g in gex_by_strike.items() if abs(s - index_price) < INDEX_CONFIG.far_max and g > 0]
+        # PROXIMITY-WEIGHTED PEAK SELECTION (2026-01-12)
+        # Research shows proximity matters more than absolute GEX size for 0DTE intraday moves
+        # SpotGamma: "Close to strike = stronger hedging activity"
+        # MenthorQ: "ATM or 1-2 strikes OTM is optimal (30-50 delta)"
+        # Academic: Gamma decays with distance² (Black-Scholes)
 
-        if near_strikes:
-            pin_strike, pin_gex = max(near_strikes, key=lambda x: x[1])
-            log(f"GEX PIN calculated: {pin_strike} (GEX={pin_gex/1e9:.1f}B)")
+        # Step 1: Filter to peaks within realistic intraday move
+        # SPX: 1.5% (~90pts), NDX: 2.0% (~420pts) based on typical 0DTE ranges
+        max_distance_pct = 0.015 if INDEX_CONFIG.code == 'SPX' else 0.020
+        max_distance = index_price * max_distance_pct
 
-            # Log top 3 for reference
-            sorted_near = sorted(near_strikes, key=lambda x: x[1], reverse=True)[:3]
-            for s, g in sorted_near:
-                log(f"  GEX at {s}: {g/1e9:+.1f}B")
+        nearby_peaks = [(s, g) for s, g in gex_by_strike.items()
+                        if abs(s - index_price) < max_distance and g > 0]
+
+        if not nearby_peaks:
+            log(f"No positive GEX within {max_distance_pct*100:.1f}% move ({max_distance:.0f}pts) - checking wider range")
+            # Fallback to wider range (old logic) but still filter for positive GEX
+            nearby_peaks = [(s, g) for s, g in gex_by_strike.items()
+                           if abs(s - index_price) < INDEX_CONFIG.far_max and g > 0]
+
+        if nearby_peaks:
+            # Step 2: Score peaks by proximity-weighted GEX
+            # Score = GEX / (distance_pct⁵ + 1e-12)
+            # Using quintic (5th power) distance penalty for 0DTE
+            # Research shows proximity matters MORE than absolute GEX for intraday moves
+            def score_peak(strike, gex):
+                distance_pct = abs(strike - index_price) / index_price
+                # For 0DTE near expiration, gamma decays EXTREMELY steeply with distance
+                # Quintic (5th power) penalty ensures closer peaks win even if smaller
+                # Virtually zero epsilon (1e-12) to avoid div/0 but not dominate scoring
+                return gex / (distance_pct ** 5 + 1e-12)
+
+            scored_peaks = [(s, g, score_peak(s, g)) for s, g in nearby_peaks]
+            pin_strike, pin_gex, pin_score = max(scored_peaks, key=lambda x: x[2])
+
+            distance = abs(pin_strike - index_price)
+            distance_pct = distance / index_price * 100
+            log(f"GEX PIN (proximity-weighted): {pin_strike} (GEX={pin_gex/1e9:.1f}B, {distance_pct:.2f}% away)")
+
+            # Log top 3 scored peaks for debugging multi-peak scenarios
+            sorted_scored = sorted(scored_peaks, key=lambda x: x[2], reverse=True)[:3]
+            log(f"Top 3 proximity-weighted peaks:")
+            for s, g, score in sorted_scored:
+                dist = abs(s - index_price)
+                dist_pct = dist / index_price * 100
+                log(f"  {s}: GEX={g/1e9:+.1f}B, dist={dist:.0f}pts ({dist_pct:.2f}%), score={score/1e9:.1f}")
 
             return pin_strike
         else:
