@@ -290,14 +290,14 @@ def show_market_banner():
             max_p = max(max(chart_prices), gex_pin + 5)
             sparkline = render_sparkline(prices, width=50, height=5, gex_pin=gex_pin, min_p=min_p, max_p=max_p)
 
-            # Calculate pin position for header
+            # Calculate pin position for header (match chart width of 50)
             price_range = max_p - min_p
-            pin_pos = int((gex_pin - min_p) / price_range * 48) if price_range > 0 else 24
+            pin_pos = int((gex_pin - min_p) / price_range * 49) if price_range > 0 else 24
 
-            # Print header with price range and pin marker
-            header_line = " " * pin_pos + "▼"
+            # Print header with price range and pin marker (build exact 50-char string)
+            header_line = " " * pin_pos + "▼" + " " * (49 - pin_pos)
             print(f"        {min_p:<6}{' '*18}PIN{' '*18}{max_p:>6}")
-            print(f"        |{header_line:^48}|")
+            print(f"        |{header_line}|")
 
             # Print sparkline rows (time going down)
             for i, row in enumerate(sparkline):
