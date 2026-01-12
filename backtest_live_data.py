@@ -50,6 +50,18 @@ PROFIT_TARGET_MED = 0.60   # 60% profit for MEDIUM confidence
 TRAILING_TRIGGER = 0.20    # Activate at 20% profit
 GRACE_PERIOD_SEC = 300     # 5 min grace before stop loss
 
+# Production credit thresholds (time-based quality filter)
+def get_min_credit_threshold(hour_et):
+    """Get minimum credit threshold based on time of day (ET)."""
+    if hour_et < 11:
+        return 1.50
+    elif hour_et < 12:
+        return 1.75
+    elif hour_et < 13:
+        return 2.25
+    else:  # After 1 PM
+        return 3.00
+
 
 def get_gex_peaks_for_time(index_symbol, timestamp):
     """Get GEX peaks at specific time (within ±2 minutes)."""
@@ -222,6 +234,15 @@ def simulate_trade(entry_time, prices, strategy, index_symbol):
             print(f"  Debug: Available strikes: {strikes_available[:10]}...{strikes_available[-10:]}")
             print(f"  Debug: Looking for strikes: {strategy['short_strike']}, {strategy['long_strike']}")
         return None  # Invalid trade
+
+    # Apply production credit threshold filter
+    entry_time_utc = pytz.UTC.localize(entry_time)
+    entry_time_et = entry_time_utc.astimezone(ET)
+    min_credit = get_min_credit_threshold(entry_time_et.hour)
+
+    if entry_credit < min_credit:
+        print(f"  ⚠️  Credit ${entry_credit:.2f} < min ${min_credit:.2f} (skipped by production filter)")
+        return None
 
     # Profit target
     if strategy['confidence'] == 'HIGH':
