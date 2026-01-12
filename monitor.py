@@ -34,6 +34,9 @@ import tempfile  # BUGFIX (2026-01-10): For atomic file writes
 #                              CONFIGURATION
 # ============================================================================
 
+# Import index configuration for multi-index support
+from index_config import get_index_config
+
 from config import (
     PAPER_ACCOUNT_ID,
     LIVE_ACCOUNT_ID,
@@ -61,11 +64,11 @@ from discord_autodelete import DiscordAutoDelete
 ET = pytz.timezone('America/New_York')
 
 # File paths
-ORDERS_FILE_PAPER = "/root/gamma/data/orders_paper.json"
-ORDERS_FILE_LIVE = "/root/gamma/data/orders_live.json"
-TRADE_LOG_FILE = "/root/gamma/data/trades.csv"
-LOG_FILE_PAPER = "/root/gamma/data/monitor_paper.log"
-LOG_FILE_LIVE = "/root/gamma/data/monitor_live.log"
+ORDERS_FILE_PAPER = "/gamma-scalper/data/orders_paper.json"
+ORDERS_FILE_LIVE = "/gamma-scalper/data/orders_live.json"
+TRADE_LOG_FILE = "/gamma-scalper/data/trades.csv"
+LOG_FILE_PAPER = "/gamma-scalper/data/monitor_paper.log"
+LOG_FILE_LIVE = "/gamma-scalper/data/monitor_live.log"
 
 # Monitor settings
 POLL_INTERVAL = 15              # Seconds between checks (tighter stop loss monitoring)
@@ -130,11 +133,11 @@ discord_autodelete = None
 
 # Use separate storage files and webhooks for LIVE and PAPER to avoid race conditions
 if MODE == 'REAL':
-    DISCORD_STORAGE_FILE = "/root/gamma/data/discord_messages_live.json"
+    DISCORD_STORAGE_FILE = "/gamma-scalper/data/discord_messages_live.json"
     DISCORD_WEBHOOK_URL = DISCORD_WEBHOOK_LIVE_URL
     HEALTHCHECK_URL = HEALTHCHECK_LIVE_URL
 else:
-    DISCORD_STORAGE_FILE = "/root/gamma/data/discord_messages_paper.json"
+    DISCORD_STORAGE_FILE = "/gamma-scalper/data/discord_messages_paper.json"
     DISCORD_WEBHOOK_URL = DISCORD_WEBHOOK_PAPER_URL
     HEALTHCHECK_URL = HEALTHCHECK_PAPER_URL
 
@@ -393,7 +396,7 @@ def send_discord_daily_summary(trades_today):
 # ============================================================================
 
 def load_orders():
-    """Load tracked orders from JSON file with file locking."""
+    """Load tracked orders from JSON file with file locking (multi-index support)."""
     import fcntl
     if not os.path.exists(ORDERS_FILE):
         return []
@@ -405,7 +408,18 @@ def load_orders():
                 content = f.read().strip()
                 if not content:
                     return []
-                return json.loads(content)
+                orders = json.loads(content)
+
+                # ENHANCEMENT: Add IndexConfig to each order for multi-index support
+                for order in orders:
+                    index_code = order.get('index_code', 'SPX')  # Default to SPX for legacy orders
+                    try:
+                        order['_config'] = get_index_config(index_code)
+                    except ValueError:
+                        log(f"Warning: Unknown index_code '{index_code}' for order {order.get('order_id')}, defaulting to SPX")
+                        order['_config'] = get_index_config('SPX')
+
+                return orders
             finally:
                 fcntl.flock(f, fcntl.LOCK_UN)
     except (json.JSONDecodeError, Exception) as e:
@@ -421,7 +435,14 @@ def save_orders(orders):
     with open(ORDERS_FILE, 'w') as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         try:
-            json.dump(orders, f, indent=2)
+            # BUGFIX (2026-01-12): Remove _config before JSON serialization
+            # _config is IndexConfig object (not JSON serializable), only used in memory
+            orders_serializable = []
+            for order in orders:
+                order_copy = order.copy()
+                order_copy.pop('_config', None)  # Remove _config if present
+                orders_serializable.append(order_copy)
+            json.dump(orders_serializable, f, indent=2)
         finally:
             fcntl.flock(f, fcntl.LOCK_UN)
 
@@ -572,10 +593,11 @@ def close_spread(order_data):
             'quantity': order_data.get('quantity', 1)
         })
     
-    # Build order data
+    # Build order data (use index-specific option root)
+    config = order_data.get('_config') or get_index_config(order_data.get('index_code', 'SPX'))
     data = {
         "class": "multileg",
-        "symbol": "SPXW",
+        "symbol": config.option_root,  # SPXW or NDXW
         "type": "market",
         "duration": "day",
         "tag": "GEXEXIT"
@@ -758,7 +780,7 @@ def update_trade_log(order_id, exit_value, exit_reason, entry_credit, entry_time
 
                 # Update account balance (autoscaling)
                 try:
-                    balance_file = "/root/gamma/data/account_balance.json"
+                    balance_file = "/gamma-scalper/data/account_balance.json"
                     if os.path.exists(balance_file):
                         with open(balance_file, 'r') as f:
                             balance_data = json.load(f)
