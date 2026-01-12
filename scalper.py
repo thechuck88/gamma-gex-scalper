@@ -257,7 +257,15 @@ HEADERS = {"Accept": "application/json", "Authorization": f"Bearer {TRADIER_KEY}
 DISCORD_WEBHOOK_URL = DISCORD_WEBHOOK_LIVE_URL if mode == "REAL" else DISCORD_WEBHOOK_PAPER_URL
 
 TRADE_LOG_FILE = "/gamma-scalper/data/trades.csv"
-LOCK_FILE = "/tmp/gexscalper.lock"
+
+# BUGFIX (2026-01-12): Make lock file unique per index/mode combination
+# Previously all 4 cron jobs (SPX PAPER, SPX LIVE, NDX PAPER, NDX LIVE) fought over same lock
+# Now each combination gets its own lock file
+LOCK_FILE = f"/tmp/gexscalper_{INDEX_CONFIG.code.lower()}_{mode.lower()}.lock"
+
+# Maximum lock age before considered stale (seconds)
+# Normal run takes ~30s, order fill timeout is 300s, so 600s (10 min) is very conservative
+LOCK_MAX_AGE_SECONDS = 600
 
 ET = pytz.timezone('US/Eastern')
 CUTOFF_HOUR = 14  # No new trades after 2 PM ET (was 3 PM)
@@ -278,25 +286,100 @@ print("=" * 70)
 def log(msg):
     print(f"[{datetime.datetime.now(ET).strftime('%H:%M:%S')}] {msg}")
 
-print(f"[{datetime.datetime.now(ET).strftime('%H:%M:%S')}] Scalper starting...")
+def is_process_running(pid):
+    """Check if a process with given PID is still running."""
+    try:
+        os.kill(pid, 0)  # Signal 0 doesn't kill, just checks existence
+        return True
+    except OSError:
+        return False
+
+def check_and_remove_stale_lock():
+    """
+    Check if lock file is stale and remove it if so.
+
+    A lock is considered stale if:
+    1. The PID in the lock file is not running, OR
+    2. The lock file is older than LOCK_MAX_AGE_SECONDS
+
+    Returns True if stale lock was removed, False otherwise.
+    """
+    if not os.path.exists(LOCK_FILE):
+        return False
+
+    try:
+        # Check lock file age
+        lock_age = time.time() - os.path.getmtime(LOCK_FILE)
+
+        # Read PID from lock file
+        with open(LOCK_FILE, 'r') as f:
+            lock_pid_str = f.read().strip()
+
+        lock_pid = int(lock_pid_str) if lock_pid_str.isdigit() else None
+
+        # Check if stale due to dead process
+        if lock_pid and not is_process_running(lock_pid):
+            log(f"STALE LOCK DETECTED: PID {lock_pid} is not running (lock age: {lock_age:.0f}s)")
+            log(f"Removing stale lock file: {LOCK_FILE}")
+            os.remove(LOCK_FILE)
+            return True
+
+        # Check if stale due to age (even if process somehow still exists)
+        if lock_age > LOCK_MAX_AGE_SECONDS:
+            log(f"STALE LOCK DETECTED: Lock age {lock_age:.0f}s exceeds max {LOCK_MAX_AGE_SECONDS}s")
+            log(f"PID {lock_pid} may be hung — removing stale lock file: {LOCK_FILE}")
+            os.remove(LOCK_FILE)
+            return True
+
+        # Lock appears valid
+        log(f"Lock held by PID {lock_pid} (age: {lock_age:.0f}s) — appears valid")
+        return False
+
+    except Exception as e:
+        log(f"Error checking stale lock: {e}")
+        # If we can't read/parse the lock file, try to remove it
+        try:
+            os.remove(LOCK_FILE)
+            log(f"Removed unreadable lock file: {LOCK_FILE}")
+            return True
+        except:
+            return False
+
+log(f"Scalper starting... (lock file: {LOCK_FILE})")
+
+# BUGFIX (2026-01-12): Check for stale locks before attempting to acquire
+# This handles cases where previous process crashed without releasing lock
+stale_removed = check_and_remove_stale_lock()
+if stale_removed:
+    log("Stale lock removed — proceeding with lock acquisition")
 
 # Acquire exclusive lock using fcntl (atomic, no race condition)
 # This prevents duplicate orders if multiple scalper instances start simultaneously
+lock_fd = None
 try:
     lock_fd = open(LOCK_FILE, 'w')
     # Try to acquire exclusive lock (non-blocking)
     # LOCK_EX = exclusive lock, LOCK_NB = non-blocking (fail immediately if locked)
     fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    # Write PID for debugging
+    # Write PID and timestamp for debugging and stale detection
     lock_fd.write(f"{os.getpid()}\n")
     lock_fd.flush()
-    print(f"[{datetime.datetime.now(ET).strftime('%H:%M:%S')}] Lock acquired (PID: {os.getpid()})")
+    log(f"Lock acquired (PID: {os.getpid()})")
 except BlockingIOError:
-    # Another instance holds the lock
-    print(f"[{datetime.datetime.now(ET).strftime('%H:%M:%S')}] Lock file exists — another instance running, exiting")
+    # Another instance holds the lock — check PID for better logging
+    try:
+        with open(LOCK_FILE, 'r') as f:
+            holder_pid = f.read().strip()
+        log(f"Lock held by PID {holder_pid} — another instance running, exiting")
+    except:
+        log("Lock held by another instance (could not read PID) — exiting")
+    if lock_fd:
+        lock_fd.close()
     exit(0)
 except Exception as e:
-    print(f"[{datetime.datetime.now(ET).strftime('%H:%M:%S')}] Failed to acquire lock: {e}")
+    log(f"Failed to acquire lock: {e}")
+    if lock_fd:
+        lock_fd.close()
     exit(1)
 
 # ==============================================
@@ -1505,19 +1588,37 @@ try:
 
     log("Trade complete — monitor.py will handle TP/SL exits.")
 
-except SystemExit:
-    log("GEX Scalper finished — no action taken")
+except SystemExit as e:
+    # SystemExit is raised for normal exits (e.g., time cutoff, filters)
+    exit_msg = str(e) if str(e) else "no action taken"
+    log(f"GEX Scalper finished — {exit_msg}")
 except Exception as e:
     log(f"FATAL ERROR: {e}")
+    import traceback
+    traceback.print_exc()
 finally:
-    # Release lock (automatic on file close, but explicit is better)
-    # IMPORTANT: Do NOT delete the lock file - fcntl locks are on file descriptors
-    # Deleting the file creates a race condition where multiple processes can acquire
-    # locks on different inodes of the same path
+    # CRITICAL: ALWAYS release the lock, no matter what
+    # This finally block runs even on:
+    # - Normal exit
+    # - SystemExit
+    # - Unhandled exceptions
+    # - Keyboard interrupt (Ctrl+C)
+    # - SIGTERM (kill command)
+    #
+    # NOTE: Does NOT run on SIGKILL (kill -9) or system crash
+    # For those cases, the stale lock detection at startup will handle cleanup
     try:
-        if 'lock_fd' in globals() and lock_fd:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
-            lock_fd.close()
-            log("Lock released")
+        if 'lock_fd' in globals() and lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except Exception as unlock_err:
+                log(f"Warning: Error unlocking: {unlock_err}")
+            try:
+                lock_fd.close()
+            except Exception as close_err:
+                log(f"Warning: Error closing lock file: {close_err}")
+            log(f"Lock released (PID: {os.getpid()})")
+        else:
+            log("No lock to release (lock_fd not acquired)")
     except Exception as e:
-        log(f"Error releasing lock: {e}")
+        log(f"Error in lock cleanup: {e}")
