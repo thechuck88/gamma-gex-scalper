@@ -763,7 +763,7 @@ MAX_DAILY_POSITIONS = 3  # Limit concurrent open positions to prevent unbounded 
 # ========== AUTOSCALING CONFIGURATION (2026-01-10) ==========
 AUTOSCALING_ENABLED = True          # Enable Half-Kelly position sizing
 STARTING_CAPITAL = 20000             # Starting account balance ($20k for conservative start)
-MAX_CONTRACTS_PER_TRADE = 10         # Maximum contracts (Kelly formula scales from 1-10 as account grows)
+MAX_CONTRACTS_PER_TRADE = 1          # RAMP-UP: Start with 1 contract (2026-01-12), increase after 1 month of live trading
 STOP_LOSS_PER_CONTRACT = 150         # Max loss per contract (from backtest data)
 ACCOUNT_BALANCE_FILE = "/gamma-scalper/data/account_balance.json"  # Track balance across restarts
 
