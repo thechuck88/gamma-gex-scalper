@@ -593,19 +593,59 @@ def calculate_gex_pin(index_price):
                 return gex / (distance_pct ** 5 + 1e-12)
 
             scored_peaks = [(s, g, score_peak(s, g)) for s, g in nearby_peaks]
-            pin_strike, pin_gex, pin_score = max(scored_peaks, key=lambda x: x[2])
 
-            distance = abs(pin_strike - index_price)
-            distance_pct = distance / index_price * 100
-            log(f"GEX PIN (proximity-weighted): {pin_strike} (GEX={pin_gex/1e9:.1f}B, {distance_pct:.2f}% away)")
-
-            # Log top 3 scored peaks for debugging multi-peak scenarios
+            # Log top 3 scored peaks BEFORE competing peaks detection
             sorted_scored = sorted(scored_peaks, key=lambda x: x[2], reverse=True)[:3]
             log(f"Top 3 proximity-weighted peaks:")
             for s, g, score in sorted_scored:
                 dist = abs(s - index_price)
                 dist_pct = dist / index_price * 100
                 log(f"  {s}: GEX={g/1e9:+.1f}B, dist={dist:.0f}pts ({dist_pct:.2f}%), score={score/1e9:.1f}")
+
+            # COMPETING PEAKS DETECTION (2026-01-12)
+            # When price is between two comparable peaks, use IC instead of directional
+            # Research: "Caged" volatility between gamma walls (SpotGamma/Bookmap)
+            if len(sorted_scored) >= 2:
+                peak1_strike, peak1_gex, peak1_score = sorted_scored[0]
+                peak2_strike, peak2_gex, peak2_score = sorted_scored[1]
+
+                # Check if peaks are competing:
+                # 1. Comparable strength (score within 2x) → similar magnetic pull
+                # 2. On opposite sides of price → opposing forces
+                # 3. Price reasonably centered (within 40% of equidistant)
+                score_ratio = min(peak1_score, peak2_score) / max(peak1_score, peak2_score)
+                opposite_sides = (peak1_strike < index_price < peak2_strike) or \
+                                 (peak2_strike < index_price < peak1_strike)
+
+                distance1 = abs(peak1_strike - index_price)
+                distance2 = abs(peak2_strike - index_price)
+                distance_ratio = min(distance1, distance2) / max(distance1, distance2)
+                reasonably_centered = distance_ratio > 0.4
+
+                if score_ratio > 0.5 and opposite_sides and reasonably_centered:
+                    # COMPETING PEAKS DETECTED
+                    log(f"⚠️  COMPETING PEAKS DETECTED:")
+                    log(f"   Peak 1: {peak1_strike} ({peak1_gex/1e9:.1f}B GEX, {distance1:.0f}pts away)")
+                    log(f"   Peak 2: {peak2_strike} ({peak2_gex/1e9:.1f}B GEX, {distance2:.0f}pts away)")
+                    log(f"   Score ratio: {score_ratio:.2f} (comparable strength)")
+                    log(f"   Price between peaks → IC strategy (profit from cage)")
+
+                    # Use midpoint for IC setup (triggers IC in get_gex_trade_setup)
+                    midpoint = (peak1_strike + peak2_strike) / 2
+                    pin_strike = INDEX_CONFIG.round_strike(midpoint)
+
+                    log(f"GEX PIN (adjusted for competing peaks): {pin_strike}")
+                    log(f"   Midpoint between {peak1_strike} and {peak2_strike}")
+                    log(f"   Strategy: Iron Condor (profit from caged volatility)")
+
+                    return pin_strike
+
+            # No competing peaks - use top peak (normal case)
+            pin_strike, pin_gex, pin_score = sorted_scored[0]
+
+            distance = abs(pin_strike - index_price)
+            distance_pct = distance / index_price * 100
+            log(f"GEX PIN (proximity-weighted): {pin_strike} (GEX={pin_gex/1e9:.1f}B, {distance_pct:.2f}% away)")
 
             return pin_strike
         else:
