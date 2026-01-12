@@ -48,7 +48,7 @@ class IndexConfig:
 
     # ============== Position Limits ==============
     max_daily_positions: int = 3
-    max_contracts_per_trade: int = 3
+    max_contracts_per_trade: int = 10  # Kelly formula scales from 1-10 as account grows
 
     # ============== Spread Quality ==============
     max_spread_pct: float = 0.25  # Max bid-ask spread (25% for SPX, may adjust for NDX)
@@ -167,7 +167,7 @@ SPX_CONFIG = IndexConfig(
     moderate_buffer=15,
     far_buffer=25,
     max_daily_positions=3,
-    max_contracts_per_trade=3,
+    max_contracts_per_trade=10,
     max_spread_pct=0.25,
 )
 
@@ -176,11 +176,11 @@ NDX_CONFIG = IndexConfig(
     name='Nasdaq-100',
     index_symbol='NDX',
     etf_symbol='QQQ',
-    option_root='NDXW',
+    option_root='NDXP',
     vix_symbol='VIX',
     etf_multiplier=42.5,
-    strike_increment=25,
-    base_spread_width=25,
+    strike_increment=10,
+    base_spread_width=30,
     near_pin_max=30,       # ~1 strike in NDX terms
     moderate_max=75,       # ~3 strikes
     far_max=250,           # ~10 strikes
@@ -188,7 +188,7 @@ NDX_CONFIG = IndexConfig(
     moderate_buffer=75,    # ~3 strikes
     far_buffer=125,        # ~5 strikes
     max_daily_positions=3,
-    max_contracts_per_trade=3,
+    max_contracts_per_trade=10,
     max_spread_pct=0.30,   # NDX has wider bid-ask spreads
 )
 

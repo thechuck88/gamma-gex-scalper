@@ -590,7 +590,7 @@ def close_spread(order_data):
         legs.append({
             'option_symbol': symbol,
             'side': side,
-            'quantity': order_data.get('quantity', 1)
+            'quantity': order_data.get('position_size', 1)
         })
     
     # Build order data (use index-specific option root)

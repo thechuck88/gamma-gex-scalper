@@ -1359,7 +1359,7 @@ try:
 
     # === REAL ENTRY ORDER ===
     entry_data = {
-        "class": "multileg", "symbol": INDEX_CONFIG.option_root,
+        "class": "multileg", "symbol": INDEX_CONFIG.index_symbol,
         "type": "credit", "price": limit_price, "duration": "day", "tag": "GEXENTRY",
         "option_requirement": "aon",  # CRITICAL FIX-3: All-or-None (prevents partial fills / naked positions)
         "side[0]": "sell_to_open", "quantity[0]": position_size,
