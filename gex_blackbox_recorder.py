@@ -37,6 +37,26 @@ from index_config import get_index_config
 # Database location
 DB_PATH = "/root/gamma/data/gex_blackbox.db"
 
+
+def get_optimized_connection():
+    """
+    Get database connection with performance optimizations.
+
+    Call this instead of sqlite3.connect(DB_PATH) to ensure
+    all connections use optimal settings.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    # Apply performance optimizations (must be set per connection)
+    cursor.execute("PRAGMA journal_mode=WAL")  # Write-Ahead Logging
+    cursor.execute("PRAGMA synchronous=NORMAL")  # Faster commits
+    cursor.execute("PRAGMA cache_size=-64000")  # 64 MB cache
+    cursor.execute("PRAGMA temp_store=MEMORY")  # Temp in RAM
+    cursor.execute("PRAGMA mmap_size=268435456")  # 256 MB mmap
+
+    return conn
+
 # Tradier API (use LIVE for options data)
 try:
     from config import TRADIER_LIVE_KEY
@@ -53,9 +73,16 @@ TRADIER_HEADERS = {
 
 
 def init_database():
-    """Initialize SQLite database with schema."""
-    conn = sqlite3.connect(DB_PATH)
+    """Initialize SQLite database with schema and performance optimizations."""
+    conn = get_optimized_connection()
     cursor = conn.cursor()
+
+    # Performance optimizations for write-heavy time-series workload
+    cursor.execute("PRAGMA journal_mode=WAL")  # Write-Ahead Logging (faster writes)
+    cursor.execute("PRAGMA synchronous=NORMAL")  # Balance safety/speed
+    cursor.execute("PRAGMA cache_size=-64000")  # 64 MB cache
+    cursor.execute("PRAGMA temp_store=MEMORY")  # Temp tables in RAM
+    cursor.execute("PRAGMA mmap_size=268435456")  # 256 MB memory-mapped I/O
 
     # Table 1: Raw options snapshots (full chain data)
     cursor.execute("""
@@ -127,6 +154,64 @@ def init_database():
     conn.commit()
     conn.close()
     print(f"✅ Database initialized: {DB_PATH}")
+
+
+def cleanup_old_data(retention_days=365):
+    """
+    Remove data older than retention_days to keep database size manageable.
+
+    Default: 365 days (1 year)
+
+    Called daily by the service to maintain rolling 1-year window.
+    """
+    try:
+        conn = get_optimized_connection()
+        cursor = conn.cursor()
+
+        # Calculate cutoff date
+        from datetime import datetime, timedelta
+        cutoff = datetime.now() - timedelta(days=retention_days)
+        cutoff_str = cutoff.strftime('%Y-%m-%d %H:%M:%S')
+
+        # Count records before cleanup
+        cursor.execute("SELECT COUNT(*) FROM options_snapshots WHERE timestamp < ?", (cutoff_str,))
+        old_snapshots = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM gex_peaks WHERE timestamp < ?", (cutoff_str,))
+        old_peaks = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM options_prices_live WHERE timestamp < ?", (cutoff_str,))
+        old_prices = cursor.fetchone()[0]
+
+        if old_snapshots == 0 and old_peaks == 0 and old_prices == 0:
+            print(f"✅ No data older than {retention_days} days - cleanup skipped")
+            conn.close()
+            return True
+
+        # Delete old data from all tables
+        cursor.execute("DELETE FROM options_snapshots WHERE timestamp < ?", (cutoff_str,))
+        cursor.execute("DELETE FROM gex_peaks WHERE timestamp < ?", (cutoff_str,))
+        cursor.execute("DELETE FROM competing_peaks WHERE timestamp < ?", (cutoff_str,))
+        cursor.execute("DELETE FROM market_context WHERE timestamp < ?", (cutoff_str,))
+        cursor.execute("DELETE FROM options_prices_live WHERE timestamp < ?", (cutoff_str,))
+
+        conn.commit()
+
+        print(f"🗑️  Cleaned up data older than {retention_days} days:")
+        print(f"   - {old_snapshots} option snapshots")
+        print(f"   - {old_peaks} GEX peaks")
+        print(f"   - {old_prices} live prices")
+
+        # Vacuum to reclaim space
+        print("   Vacuuming database...")
+        cursor.execute("VACUUM")
+
+        conn.close()
+        return True
+
+    except Exception as e:
+        print(f"❌ Cleanup error: {e}")
+        return False
 
 
 def get_price(symbol):
@@ -345,7 +430,7 @@ def record_snapshot(index_symbol):
     # Store to database
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_optimized_connection()
     cursor = conn.cursor()
 
     try:

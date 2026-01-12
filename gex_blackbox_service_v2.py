@@ -21,7 +21,7 @@ import threading
 # Import the recorder function
 sys.path.insert(0, '/root/gamma')
 
-from gex_blackbox_recorder import record_snapshot, init_database, get_price, get_options_chain
+from gex_blackbox_recorder import record_snapshot, init_database, get_price, get_options_chain, cleanup_old_data, get_optimized_connection
 import os
 
 # Configuration
@@ -41,7 +41,7 @@ GEX_CHECK_TIMES = [
 ]
 
 PRICE_MONITOR_INTERVAL = 30  # 30 seconds
-PRICE_BUFFER_POINTS = 60     # ±60 points from pin
+PRICE_BUFFER_POINTS = 250    # ±250 points from pin (for credit spreads)
 
 DB_PATH = "/root/gamma/data/gex_blackbox.db"
 
@@ -54,7 +54,7 @@ ET = pytz.timezone('America/New_York')
 
 def init_live_pricing_table():
     """Add live pricing table for 30-second snapshots."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_optimized_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -83,7 +83,7 @@ def init_live_pricing_table():
 
 def get_latest_pin(index_symbol):
     """Get the most recent GEX pin for an index."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_optimized_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -104,7 +104,13 @@ def get_latest_pin(index_symbol):
 
 def record_live_pricing(index_symbol, pin_strike, expiration):
     """
-    Record live pricing for strikes within ±60pts of pin.
+    Record live pricing for strikes within ±250pts of pin.
+
+    This range supports:
+    - Put credit spreads: 100pt wide (e.g., sell 5950P, buy 5850P)
+    - Call credit spreads: 100pt wide (e.g., sell 6050C, buy 6150C)
+    - Iron condors: Both wings covered
+    - Flexibility for wider spreads
 
     Args:
         index_symbol: 'SPX' or 'NDX'
@@ -120,7 +126,7 @@ def record_live_pricing(index_symbol, pin_strike, expiration):
     if not chain:
         return False
 
-    # Filter to strikes within ±60pts of pin
+    # Filter to strikes within ±250pts of pin (for credit spreads)
     min_strike = pin_strike - PRICE_BUFFER_POINTS
     max_strike = pin_strike + PRICE_BUFFER_POINTS
 
@@ -132,7 +138,7 @@ def record_live_pricing(index_symbol, pin_strike, expiration):
 
     # Store to database
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_optimized_connection()
     cursor = conn.cursor()
 
     try:
@@ -277,11 +283,45 @@ def price_monitor_thread():
             time.sleep(60)
 
 
+def cleanup_thread():
+    """Thread for daily data cleanup at 6 AM ET."""
+    print("[CLEANUP] Cleanup thread starting...")
+    last_cleanup_date = None
+
+    while True:
+        try:
+            now_et = datetime.now(ET)
+            current_date = now_et.date()
+            current_time = now_et.time()
+
+            # Run cleanup once per day at 6:00 AM ET (before market opens)
+            if current_time >= dt_time(6, 0) and current_time < dt_time(6, 5):
+                if last_cleanup_date != current_date:
+                    print(f"[CLEANUP] [{now_et.strftime('%Y-%m-%d %H:%M:%S')}] Running daily cleanup...")
+                    success = cleanup_old_data(retention_days=365)
+                    if success:
+                        last_cleanup_date = current_date
+                        print(f"[CLEANUP] ✓ Daily cleanup completed")
+                    else:
+                        print(f"[CLEANUP] ✗ Daily cleanup failed")
+
+                    # Sleep 10 minutes to avoid running multiple times
+                    time.sleep(600)
+            else:
+                # Check every hour
+                time.sleep(3600)
+
+        except Exception as e:
+            print(f"[CLEANUP] ERROR in cleanup thread: {e}")
+            time.sleep(3600)
+
+
 def main():
-    """Main service - runs two threads."""
+    """Main service - runs three threads."""
     print(f"GEX Black Box Service v2 starting at {datetime.now()}")
     print(f"GEX recording times: {len(GEX_CHECK_TIMES)} checks per day")
     print(f"Price monitoring: Every {PRICE_MONITOR_INTERVAL}s")
+    print(f"Daily cleanup: 6:00 AM ET (1-year data retention)")
 
     # Initialize database
     if not os.path.exists(DB_PATH):
@@ -294,9 +334,11 @@ def main():
     # Start threads
     gex_thread = threading.Thread(target=gex_recorder_thread, daemon=True)
     price_thread = threading.Thread(target=price_monitor_thread, daemon=True)
+    cleanup_thread_obj = threading.Thread(target=cleanup_thread, daemon=True)
 
     gex_thread.start()
     price_thread.start()
+    cleanup_thread_obj.start()
 
     print("Service threads started...")
 
