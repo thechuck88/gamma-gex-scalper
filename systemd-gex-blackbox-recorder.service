@@ -1,0 +1,24 @@
+[Unit]
+Description=GEX Black Box Data Recorder
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/gamma
+ExecStart=/usr/bin/python3 /root/gamma/gex_blackbox_service_v2.py
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/gamma.env
+
+# Resource limits (prevent runaway memory)
+MemoryMax=500M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target
