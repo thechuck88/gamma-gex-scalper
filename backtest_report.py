@@ -5,15 +5,15 @@ Generate formatted report from live data backtest
 Similar to show.py but for backtest results.
 
 Usage:
+    python3 backtest_report.py                   # ALL available dates (default)
     python3 backtest_report.py 2026-01-12        # Specific date
-    python3 backtest_report.py --all             # All available dates
 """
 
 import sys
 from datetime import datetime, date, time as dt_time
 from collections import defaultdict
 
-sys.path.insert(0, '/root/gamma')
+sys.path.insert(0, '/gamma-scalper')
 from backtest_live_data import (
     get_gex_peaks_for_time, get_live_prices, get_index_price_at_time,
     determine_strategy, simulate_trade, ENTRY_TIMES,
@@ -281,14 +281,12 @@ def show_intraday_chart(all_trades):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage:")
-        print("  python3 backtest_report.py 2026-01-12")
-        print("  python3 backtest_report.py --all")
-        sys.exit(1)
-
-    if sys.argv[1] == '--all':
-        # Get all available dates
+    # Default: Use ALL available dates from database
+    if len(sys.argv) > 1:
+        # Specific date provided
+        dates = [datetime.strptime(sys.argv[1], '%Y-%m-%d').date()]
+    else:
+        # No arguments: Use ALL available dates
         conn = get_optimized_connection()
         cursor = conn.cursor()
         cursor.execute("""
@@ -298,8 +296,13 @@ def main():
         """)
         dates = [datetime.strptime(row[0], '%Y-%m-%d').date() for row in cursor.fetchall()]
         conn.close()
-    else:
-        dates = [datetime.strptime(sys.argv[1], '%Y-%m-%d').date()]
+
+        if not dates:
+            print("⚠️  No data found in database")
+            return
+
+        print(f"📊 Generating report for ALL available data ({len(dates)} days)")
+        print(f"   Date range: {dates[0]} to {dates[-1]}\n")
 
     for test_date in dates:
         # Run backtests silently

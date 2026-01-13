@@ -5,14 +5,13 @@ Live Data Backtest - Use real black box recorded data
 Uses the options_prices_live and gex_peaks tables to backtest with actual market data.
 
 Usage:
-    python3 backtest_live_data.py                    # Today, SPX only
+    python3 backtest_live_data.py                    # ALL available dates, SPX (default)
     python3 backtest_live_data.py 2026-01-12         # Specific date, SPX
     python3 backtest_live_data.py 2026-01-12 NDX     # Specific date, NDX
     python3 backtest_live_data.py 2026-01-12 ALL     # Specific date, both SPX and NDX
-    python3 backtest_live_data.py --all              # All available dates, SPX
-    python3 backtest_live_data.py --all ALL          # All available dates, both indices
 
 Note: SPX uses $5 strike increments, NDX uses $10 strike increments
+      Database will grow to 1 year of data as collection continues
 """
 
 import sys
@@ -21,10 +20,10 @@ from datetime import datetime, date, time as dt_time, timedelta
 from collections import defaultdict
 import pytz
 
-sys.path.insert(0, '/root/gamma')
+sys.path.insert(0, '/gamma-scalper')
 from gex_blackbox_recorder import get_optimized_connection
 
-DB_PATH = "/root/gamma/data/gex_blackbox.db"
+DB_PATH = "/gamma-scalper/data/gex_blackbox.db"
 ET = pytz.timezone('America/New_York')
 
 # Entry check times (same as bot)
@@ -470,25 +469,13 @@ def run_backtest_for_date(test_date, index_symbol='SPX'):
 
 
 def main():
-    # Parse arguments: [date|--all] [SPX|NDX|ALL]
-    test_date = date.today()
+    # Parse arguments: [date] [SPX|NDX|ALL]
+    # Default: Use ALL available dates from database
     index_symbols = ['SPX']
 
     if len(sys.argv) > 1:
-        if sys.argv[1] == '--all':
-            # Get all available dates
-            conn = get_optimized_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT DISTINCT DATE(timestamp) as trade_date
-                FROM options_prices_live
-                ORDER BY trade_date ASC
-            """)
-            dates = [datetime.strptime(row[0], '%Y-%m-%d').date() for row in cursor.fetchall()]
-            conn.close()
-        else:
-            # Specific date
-            dates = [datetime.strptime(sys.argv[1], '%Y-%m-%d').date()]
+        # Specific date provided
+        dates = [datetime.strptime(sys.argv[1], '%Y-%m-%d').date()]
 
         # Check for index symbol argument
         if len(sys.argv) > 2:
@@ -497,7 +484,23 @@ def main():
             else:
                 index_symbols = [sys.argv[2].upper()]
     else:
-        dates = [test_date]
+        # No arguments: Use ALL available dates from database
+        conn = get_optimized_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT DATE(timestamp) as trade_date
+            FROM options_prices_live
+            ORDER BY trade_date ASC
+        """)
+        dates = [datetime.strptime(row[0], '%Y-%m-%d').date() for row in cursor.fetchall()]
+        conn.close()
+
+        if not dates:
+            print("⚠️  No data found in database")
+            return
+
+        print(f"📊 Running backtest on ALL available data ({len(dates)} days)")
+        print(f"   Date range: {dates[0]} to {dates[-1]}")
 
     # Run backtest for each date and index
     for test_date in dates:

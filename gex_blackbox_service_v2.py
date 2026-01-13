@@ -43,7 +43,7 @@ GEX_CHECK_TIMES = [
 PRICE_MONITOR_INTERVAL = 30  # 30 seconds
 PRICE_BUFFER_POINTS = 250    # ±250 points from pin (for credit spreads)
 
-DB_PATH = "/root/gamma/data/gex_blackbox.db"
+DB_PATH = "/gamma-scalper/data/gex_blackbox.db"
 
 # Market hours (ET)
 MARKET_OPEN = dt_time(9, 30)   # 9:30 AM ET
