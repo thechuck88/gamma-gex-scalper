@@ -321,14 +321,22 @@ def check_and_remove_stale_lock():
         if lock_pid and not is_process_running(lock_pid):
             log(f"STALE LOCK DETECTED: PID {lock_pid} is not running (lock age: {lock_age:.0f}s)")
             log(f"Removing stale lock file: {LOCK_FILE}")
-            os.remove(LOCK_FILE)
+            # HIGH-2 FIX (2026-01-13): Handle race condition if another process removed lock first
+            try:
+                os.remove(LOCK_FILE)
+            except FileNotFoundError:
+                log("Lock file already removed by another process")
             return True
 
         # Check if stale due to age (even if process somehow still exists)
         if lock_age > LOCK_MAX_AGE_SECONDS:
             log(f"STALE LOCK DETECTED: Lock age {lock_age:.0f}s exceeds max {LOCK_MAX_AGE_SECONDS}s")
             log(f"PID {lock_pid} may be hung — removing stale lock file: {LOCK_FILE}")
-            os.remove(LOCK_FILE)
+            # HIGH-2 FIX (2026-01-13): Handle race condition if another process removed lock first
+            try:
+                os.remove(LOCK_FILE)
+            except FileNotFoundError:
+                log("Lock file already removed by another process")
             return True
 
         # Lock appears valid
@@ -870,7 +878,12 @@ def calculate_position_size_kelly(account_balance, trade_stats):
         avg_loss = BOOTSTRAP_AVG_LOSS
 
     # Kelly fraction
-    kelly_f = (win_rate * avg_win - (1 - win_rate) * avg_loss) / avg_win
+    # CRITICAL-3 FIX (2026-01-13): Prevent division by zero if all trades were losses
+    if avg_win > 0:
+        kelly_f = (win_rate * avg_win - (1 - win_rate) * avg_loss) / avg_win
+    else:
+        kelly_f = 0  # No positive trades, use minimum position
+        log("⚠️  CRITICAL-3: avg_win=0, using minimum position size")
 
     # Use half-Kelly for safety
     half_kelly = kelly_f * 0.5
@@ -1002,8 +1015,9 @@ def get_gex_trade_setup(pin_price, index_price, vix):
     This ensures backtest and live scalper use IDENTICAL logic.
     """
     # Use core module (GEXTradeSetup dataclass) with default vix_threshold=20.0
-    # BUGFIX (2026-01-12): Re-added INDEX_CONFIG parameter (required by core function)
-    setup = core_get_gex_trade_setup(pin_price, index_price, vix, INDEX_CONFIG)
+    # CRITICAL-1 FIX (2026-01-13): Pass vix_threshold (float) not INDEX_CONFIG (object)
+    # VIX >= 20 skips trading (too volatile for 0DTE)
+    setup = core_get_gex_trade_setup(pin_price, index_price, vix, vix_threshold=20.0)
 
     # Convert dataclass to dict for backwards compatibility
     return {

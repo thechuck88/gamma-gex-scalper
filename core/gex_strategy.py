@@ -99,6 +99,10 @@ def get_gex_trade_setup(pin_price: float, spx_price: float, vix: float,
     abs_distance = abs(distance)
     spread_width = get_spread_width(vix)
 
+    # HIGH-4 FIX (2026-01-13): Defensive check in case get_spread_width() is modified
+    if spread_width <= 0:
+        spread_width = 5  # Default fallback to 5pt SPX spread
+
     # === VIX TOO HIGH: Skip ===
     if vix >= vix_threshold:
         return GEXTradeSetup(

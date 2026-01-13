@@ -594,7 +594,14 @@ def close_spread(order_data):
         })
     
     # Build order data (use index-specific option root)
-    config = order_data.get('_config') or get_index_config(order_data.get('index_code', 'SPX'))
+    # HIGH-1 FIX (2026-01-13): Validate config retrieval, handle errors
+    try:
+        config = order_data.get('_config') or get_index_config(order_data.get('index_code', 'SPX'))
+    except ValueError as e:
+        log(f"ERROR HIGH-1: Invalid index config for order {order_id}: {e}")
+        log(f"  Defaulting to SPX config for exit")
+        config = get_index_config('SPX')  # Safe fallback
+
     data = {
         "class": "multileg",
         "symbol": config.option_root,  # SPXW or NDXW
@@ -1011,13 +1018,15 @@ def check_and_close_positions():
                 # Check hold qualification if profit reached 80%
                 if profit_pct >= HOLD_PROFIT_THRESHOLD:
                     # Get current VIX
+                    # HIGH-3 FIX (2026-01-13): Log exceptions instead of silently swallowing them
                     try:
                         vix_quote = requests.get(f"{BASE_URL}/markets/quotes",
                                                params={"symbols": "$VIX.X"},
                                                headers=HEADERS,
                                                timeout=10).json()
                         current_vix = float(vix_quote.get('quotes', {}).get('quote', {}).get('last', 99))
-                    except:
+                    except Exception as e:
+                        log(f"⚠️  HIGH-3: VIX fetch failed for hold check: {e}")
                         current_vix = 99  # If can't fetch, assume high VIX (don't hold)
 
                     # Calculate time left to expiration (assume 4 PM expiration)
