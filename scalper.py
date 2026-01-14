@@ -268,7 +268,7 @@ LOCK_FILE = f"/tmp/gexscalper_{INDEX_CONFIG.code.lower()}_{mode.lower()}.lock"
 LOCK_MAX_AGE_SECONDS = 600
 
 ET = pytz.timezone('US/Eastern')
-CUTOFF_HOUR = 14  # No new trades after 2 PM ET (was 3 PM)
+CUTOFF_HOUR = 13  # No new trades after 1 PM ET (optimized for afternoon degradation)
 
 # Import shared GEX strategy logic (single source of truth)
 # This ensures backtest and live scalper use identical setup logic
@@ -1002,6 +1002,68 @@ def check_spread_quality(short_sym, long_sym, expected_credit):
         log(f"Error checking spread quality: {e}")
         return True  # Don't block trade on error
 
+def is_in_blackout_period(now_et):
+    """
+    Return True if current time is in a high-volatility blackout period.
+
+    Timing filters prevent entries during historically volatile periods:
+    - First 30 min after open (9:30-10:00 AM ET)
+
+    Analysis: 12/18 10:00 trade (-33%) would be blocked by market open filter.
+    Impact: Prevents quick stop-outs from opening volatility.
+    """
+    hour = now_et.hour
+    minute = now_et.minute
+
+    # First 30 min after open (9:30-10:00 AM)
+    if hour == 9 and minute >= 30:
+        return True, "Market open volatility (9:30-10:00 AM)"
+    if hour == 10 and minute == 0:
+        return True, "Market open volatility (9:30-10:00 AM)"
+
+    return False, None
+
+def check_vix_spike(current_vix, lookback_minutes=5):
+    """
+    Check if VIX spiked recently (indicates panic/volatility surge).
+
+    Returns (is_safe, message):
+    - (True, None) if safe to trade
+    - (False, reason) if VIX spiking too fast
+
+    Threshold: 5% increase in 5 minutes indicates volatility spike.
+    Example: VIX 15.0 → 15.8 in 5 min = +5.3% = skip trade
+
+    Analysis: Would catch sudden volatility surges that trigger quick stop-outs.
+    """
+    try:
+        # Download recent VIX data (1 day, 5-min intervals)
+        vix_data = yf.download("^VIX", period="1d", interval="5m", progress=False)
+
+        if len(vix_data) < 2:
+            log("VIX spike check: insufficient data, assuming safe")
+            return True, None  # Can't check, assume safe
+
+        # Get VIX from 5 minutes ago
+        recent_vix = float(vix_data['Close'].iloc[-2])
+        vix_change_pct = (current_vix - recent_vix) / recent_vix
+
+        log(f"VIX spike check: {recent_vix:.2f} → {current_vix:.2f} ({vix_change_pct*100:+.1f}% in 5min)")
+
+        # Threshold: 5% spike in 5 minutes
+        VIX_SPIKE_THRESHOLD = 0.05
+        if vix_change_pct > VIX_SPIKE_THRESHOLD:
+            reason = f"VIX spiked {vix_change_pct*100:.1f}% in 5min ({recent_vix:.2f}→{current_vix:.2f})"
+            log(f"❌ VIX spike detected: {reason}")
+            return False, reason
+
+        log(f"✅ VIX stable: {vix_change_pct*100:+.1f}% change < {VIX_SPIKE_THRESHOLD*100:.0f}% threshold")
+        return True, None
+
+    except Exception as e:
+        log(f"VIX spike check failed: {e}, assuming safe")
+        return True, None  # On error, don't block trade
+
 def get_gex_trade_setup(pin_price, index_price, vix):
     """
     Wrapper for core.gex_strategy.get_gex_trade_setup (index-agnostic)
@@ -1053,6 +1115,16 @@ try:
 
     log("GEX Scalper started")
 
+    # === TIMING BLACKOUT FILTER ===
+    # OPTIMIZATION (2026-01-13): Avoid market open volatility (9:30-10:00 AM)
+    # Analysis: 12/18 10:00 trade (-33%) stopped in 4 minutes during opening volatility
+    in_blackout, blackout_reason = is_in_blackout_period(now_et)
+    if in_blackout:
+        log(f"In volatility blackout period: {blackout_reason}")
+        log("NO TRADE — timing filter prevents entry during high-volatility windows")
+        send_discord_skip_alert(f"Volatility blackout: {blackout_reason}", run_data)
+        raise SystemExit
+
     # === FETCH PRICES (always from LIVE API for real-time data) ===
     # Get index price directly - more accurate than ETF conversion
     index_raw = get_price(INDEX_CONFIG.index_symbol)
@@ -1086,10 +1158,21 @@ try:
     run_data['vix'] = vix
 
     # OPTIMIZATION #5: VIX Floor Filter - don't trade when volatility too low
-    VIX_FLOOR = 12.0
+    VIX_FLOOR = 13.0
     if vix < VIX_FLOOR:
         log(f"VIX {vix:.2f} below floor ({VIX_FLOOR}) — insufficient volatility for premium")
         send_discord_skip_alert(f"VIX {vix:.2f} below {VIX_FLOOR} floor", run_data)
+        raise SystemExit
+
+    # === VIX SPIKE FILTER ===
+    # OPTIMIZATION (2026-01-13): Detect sudden volatility surges
+    # Analysis: 12/16 12:00 trade (-21%) may have been caused by VIX spike
+    # Catches panic/volatility that timing filters miss
+    vix_safe, vix_spike_reason = check_vix_spike(vix)
+    if not vix_safe:
+        log(f"VIX spike detected: {vix_spike_reason}")
+        log("NO TRADE — VIX rising too fast indicates unstable conditions")
+        send_discord_skip_alert(f"VIX spike: {vix_spike_reason}", run_data)
         raise SystemExit
 
     # === EXPECTED MOVE FILTER ===
@@ -1112,12 +1195,10 @@ try:
     rsi = get_rsi("SPY")
     log(f"RSI (14-period): {rsi}")
     run_data['rsi'] = rsi
-    if mode == "REAL" and (rsi < RSI_MIN or rsi > RSI_MAX):
-        log(f"RSI {rsi} outside {RSI_MIN}-{RSI_MAX} range — NO TRADE TODAY")
+    if rsi < RSI_MIN or rsi > RSI_MAX:
+        log(f"RSI {rsi} outside {RSI_MIN}-{RSI_MAX} range — NO TRADE")
         send_discord_skip_alert(f"RSI {rsi:.1f} outside {RSI_MIN}-{RSI_MAX} range", run_data)
         raise SystemExit
-    elif mode == "PAPER":
-        log(f"PAPER MODE — RSI filter bypassed")
 
     # === FRIDAY FILTER ===
     today = date.today()
