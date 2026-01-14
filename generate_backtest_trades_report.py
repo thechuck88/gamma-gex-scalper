@@ -193,17 +193,12 @@ def generate_trades_report():
             })
         
         # Print header
-        report.append(f"{'Trade':<6} {'Date':<12} {'Time ET':<10} {'PIN':<8} {'Strat':<6} {'Conf':<6} "
-                     f"{'Entry$':<8} {'Exit$':<8} {'Exit Type':<15} {'P&L':<10} {'VIX':<6} {'Comp':<5}")
-        report.append("-"*130)
-        
+        report.append(f"{'#':<4} {'Time':<10} {'Entry':<8} {'Exit':<8} {'P&L':<8}")
+        report.append("-"*40)
+
         # Print trades
         for t in trades:
-            competing_str = "Y" if t['competing'] else "N"
-            report.append(f"{t['num']:<6} {t['date_et']:<12} {t['time_et']:<10} {t['pin_strike']:<8.1f} "
-                         f"{t['strategy']:<6} {t['confidence']:<6} ${t['entry_credit']:<7.2f} "
-                         f"${t['exit_credit']:<7.2f} {t['exit_reason']:<15} ${t['pl']:<9.0f} "
-                         f"{t['vix']:<6.2f} {competing_str:<5}")
+            report.append(f"{t['num']:<4} {t['time_et']:<10} ${t['entry_credit']:<7.2f} ${t['exit_credit']:<7.2f} ${t['pl']:<7.0f}")
         
         # Summary
         report.append("")
@@ -251,35 +246,6 @@ def generate_trades_report():
         else:
             report.append(f"{scenario_name:<20} {cutoff_hour:<8} {vix_floor:<8.1f} {'0':<10} {'$0':<11} {'$0':<11}")
     
-    # Entry time breakdown
-    report.append("")
-    report.append("="*130)
-    report.append("ENTRY TIME BREAKDOWN (BASELINE SCENARIO)")
-    report.append("="*130)
-    
-    entry_times = defaultdict(lambda: {'count': 0, 'pl': 0})
-    for snapshot in snapshots:
-        timestamp, date_et, time_et, symbol, underlying, vix, pin_strike, gex, distance, proximity, competing, ratio = snapshot
-
-        hour = int(time_et.split(':')[0])
-        if hour >= 14 or vix < 12.0 or pin_strike is None or gex is None or gex == 0:
-            continue
-
-        entry_credit = min(max(1.0, underlying * vix / 100 * 0.02), 2.5)
-        exit_credit, exit_reason, is_winner = simulate_exit(
-            entry_credit, underlying, pin_strike, vix, days_held=0
-        )
-        pl = (entry_credit - exit_credit) * 100
-        entry_times[time_et]['count'] += 1
-        entry_times[time_et]['pl'] += pl
-    
-    report.append(f"{'Entry Time':<12} {'Count':<8} {'Total P/L':<15} {'Avg P/L':<12}")
-    report.append("-"*130)
-    
-    for time_slot in sorted(entry_times.keys()):
-        data = entry_times[time_slot]
-        avg = data['pl'] / data['count'] if data['count'] > 0 else 0
-        report.append(f"{time_slot:<12} {data['count']:<8} ${data['pl']:<14.0f} ${avg:<11.0f}")
     
     report.append("")
     
