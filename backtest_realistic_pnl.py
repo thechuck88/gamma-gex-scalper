@@ -24,7 +24,25 @@ def get_optimized_connection():
     return conn
 
 
-def get_entry_credit(conn, timestamp, index_symbol, short_strike, long_strike):
+def determine_spread_type(underlying_price, pin_strike):
+    """
+    Determine spread type based on SPX position relative to PIN.
+    - If SPX > PIN: Trade CALL spreads (sell OTM calls)
+    - If SPX < PIN: Trade PUT spreads (sell OTM puts)
+    - If very close: Could trade Iron Condor (but simplify to directional for now)
+    """
+    distance_pct = abs(underlying_price - pin_strike) / underlying_price
+
+    if underlying_price > pin_strike:
+        return 'call'
+    elif underlying_price < pin_strike:
+        return 'put'
+    else:
+        # At the PIN - use call for now (could do IC)
+        return 'call'
+
+
+def get_entry_credit(conn, timestamp, index_symbol, short_strike, long_strike, option_type):
     """
     Get REAL entry credit from database using actual bid/ask prices.
     Uses closest timestamp >= entry time to handle timestamp misalignment.
@@ -32,6 +50,9 @@ def get_entry_credit(conn, timestamp, index_symbol, short_strike, long_strike):
     Short: Sell at BID
     Long: Buy at ASK
     Net: BID - ASK
+
+    Args:
+        option_type: 'call' or 'put'
     """
     cursor = conn.cursor()
 
@@ -48,20 +69,20 @@ def get_entry_credit(conn, timestamp, index_symbol, short_strike, long_strike):
 
     closest_ts = closest_ts_row[0]
 
-    # Get short leg (call at PIN) - we receive BID
+    # Get short leg (at PIN) - we receive BID
     cursor.execute("""
     SELECT bid FROM options_prices_live
-    WHERE timestamp = ? AND index_symbol = ? AND strike = ? AND option_type = 'call'
-    """, (closest_ts, index_symbol, short_strike))
+    WHERE timestamp = ? AND index_symbol = ? AND strike = ? AND option_type = ?
+    """, (closest_ts, index_symbol, short_strike, option_type))
 
     short_bid_row = cursor.fetchone()
     short_bid = short_bid_row[0] if short_bid_row else None
 
-    # Get long leg (call +5 OTM) - we pay ASK
+    # Get long leg (+5 OTM) - we pay ASK
     cursor.execute("""
     SELECT ask FROM options_prices_live
-    WHERE timestamp = ? AND index_symbol = ? AND strike = ? AND option_type = 'call'
-    """, (closest_ts, index_symbol, long_strike))
+    WHERE timestamp = ? AND index_symbol = ? AND strike = ? AND option_type = ?
+    """, (closest_ts, index_symbol, long_strike, option_type))
 
     long_ask_row = cursor.fetchone()
     long_ask = long_ask_row[0] if long_ask_row else None
@@ -72,27 +93,30 @@ def get_entry_credit(conn, timestamp, index_symbol, short_strike, long_strike):
     return short_bid - long_ask
 
 
-def get_spread_value_at_time(conn, timestamp, index_symbol, short_strike, long_strike):
+def get_spread_value_at_time(conn, timestamp, index_symbol, short_strike, long_strike, option_type):
     """
     Get current spread value at a specific timestamp.
     This is what we'd pay to close the spread now.
+
+    Args:
+        option_type: 'call' or 'put'
     """
     cursor = conn.cursor()
 
-    # Current short call price (to close, we buy at ASK)
+    # Current short price (to close, we buy at ASK)
     cursor.execute("""
     SELECT ask FROM options_prices_live
-    WHERE timestamp = ? AND index_symbol = ? AND strike = ? AND option_type = 'call'
-    """, (timestamp, index_symbol, short_strike))
+    WHERE timestamp = ? AND index_symbol = ? AND strike = ? AND option_type = ?
+    """, (timestamp, index_symbol, short_strike, option_type))
 
     short_ask_row = cursor.fetchone()
     short_ask = short_ask_row[0] if short_ask_row else None
 
-    # Current long call price (to close, we sell at BID)
+    # Current long price (to close, we sell at BID)
     cursor.execute("""
     SELECT bid FROM options_prices_live
-    WHERE timestamp = ? AND index_symbol = ? AND strike = ? AND option_type = 'call'
-    """, (timestamp, index_symbol, long_strike))
+    WHERE timestamp = ? AND index_symbol = ? AND strike = ? AND option_type = ?
+    """, (timestamp, index_symbol, long_strike, option_type))
 
     long_bid_row = cursor.fetchone()
     long_bid = long_bid_row[0] if long_bid_row else None
@@ -118,11 +142,14 @@ def get_future_timestamps(conn, entry_timestamp, index_symbol, max_bars=100):
     return [row[0] for row in cursor.fetchall()]
 
 
-def simulate_trade(conn, entry_time, entry_credit, index_symbol, short_strike, long_strike,
+def simulate_trade(conn, entry_time, entry_credit, index_symbol, short_strike, long_strike, option_type,
                    sl_pct=0.10, tp_pct=0.50, trailing_enabled=True):
     """
     Simulate a single trade from entry to exit.
     Returns: (exit_time, exit_spread_value, exit_reason, pnl)
+
+    Args:
+        option_type: 'call' or 'put'
     """
 
     if entry_credit is None or entry_credit <= 0:
@@ -140,7 +167,7 @@ def simulate_trade(conn, entry_time, entry_credit, index_symbol, short_strike, l
     future_timestamps = get_future_timestamps(conn, entry_time, index_symbol, max_bars=200)
 
     for timestamp in future_timestamps:
-        spread_value = get_spread_value_at_time(conn, timestamp, index_symbol, short_strike, long_strike)
+        spread_value = get_spread_value_at_time(conn, timestamp, index_symbol, short_strike, long_strike, option_type)
 
         if spread_value is None:
             continue
@@ -230,11 +257,21 @@ def run_backtest():
         if vix is None or vix < 12.0 or vix >= 20.0:
             continue
 
-        # Calculate entry credit using REAL prices
-        short_strike = pin_strike
-        long_strike = pin_strike + 5.0
+        # Determine spread type based on SPX position relative to PIN
+        spread_type = determine_spread_type(underlying, pin_strike)
 
-        entry_credit = get_entry_credit(conn, timestamp, index_symbol, short_strike, long_strike)
+        # Determine strikes based on spread type
+        if spread_type == 'call':
+            # CALL spread: short at PIN, long 5 pts higher
+            short_strike = pin_strike
+            long_strike = pin_strike + 5.0
+        else:  # 'put'
+            # PUT spread: short at PIN, long 5 pts lower
+            short_strike = pin_strike
+            long_strike = pin_strike - 5.0
+
+        # Calculate entry credit using REAL prices
+        entry_credit = get_entry_credit(conn, timestamp, index_symbol, short_strike, long_strike, spread_type)
 
         if entry_credit is None or entry_credit < 0.25:
             continue
@@ -243,7 +280,7 @@ def run_backtest():
 
         # Simulate the trade
         exit_time, exit_spread, exit_reason, pnl = simulate_trade(
-            conn, timestamp, entry_credit, index_symbol, short_strike, long_strike,
+            conn, timestamp, entry_credit, index_symbol, short_strike, long_strike, spread_type,
             sl_pct=0.10, tp_pct=0.50, trailing_enabled=True
         )
 
@@ -260,6 +297,7 @@ def run_backtest():
             'exit_time': exit_hour,
             'short_strike': short_strike,
             'long_strike': long_strike,
+            'spread_type': spread_type.upper(),
             'entry_credit': entry_credit,
             'exit_spread': exit_spread,
             'exit_reason': exit_reason,
@@ -340,12 +378,12 @@ def print_report(trades):
     print(f"\n" + "="*80)
     print("TRADE DETAILS")
     print("="*80)
-    print(f"{'#':<4} {'Time':<10} {'Rk':<3} {'Strikes':<15} {'Entry$':<8} {'Exit$':<8} {'Exit Reason':<15} {'P&L':<8}")
+    print(f"{'#':<4} {'Time':<10} {'T':<4} {'Rk':<3} {'Strikes':<15} {'Entry$':<8} {'Exit$':<8} {'Exit Reason':<15} {'P&L':<8}")
     print("-"*80)
 
     for t in trades:
         strikes = f"{t['short_strike']:.0f}/{t['long_strike']:.0f}"
-        print(f"{t['num']:<4} {t['entry_time']:<10} {t['peak_rank']:<3} {strikes:<15} "
+        print(f"{t['num']:<4} {t['entry_time']:<10} {t['spread_type']:<4} {t['peak_rank']:<3} {strikes:<15} "
               f"${t['entry_credit']:<7.2f} ${t['exit_spread']:<7.2f} {t['exit_reason']:<15} ${t['pnl']:<7.0f}")
 
     print("\n" + "="*80)
