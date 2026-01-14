@@ -1,0 +1,123 @@
+==========================================================================================
+FULL BACKTEST REPORT: GEX SCALPER WITH 2026-01-14 OPTIMIZATIONS
+==========================================================================================
+
+Analysis Date: 2026-01-14T07:54:57.105000
+Trades Analyzed: 39 closed trades from 2025-12-10 to 2025-12-18
+
+------------------------------------------------------------------------------------------
+BASELINE (Original Parameters)
+------------------------------------------------------------------------------------------
+Parameters:
+  Cutoff Hour:          14
+  VIX Floor:            12.0
+  RSI Always Enforced:  False
+  Use BWIC:             False
+
+Results:
+  Total Trades:                 23
+  Trades Filtered:              16
+  Total P&L:            $        -219.00
+  Win Rate:                        34.8%
+  Wins/Losses:                   8/15        
+  Avg P/L/Trade:        $          -9.52
+  Max Loss:             $        -120.00
+  Volatility (σ):       $          58.09
+  Sharpe Proxy:                   -3.77
+
+------------------------------------------------------------------------------------------
+OPT1: Cutoff Hour 14→13
+------------------------------------------------------------------------------------------
+Parameters:
+  Cutoff Hour:          13
+  VIX Floor:            12.0
+  RSI Always Enforced:  False
+  Use BWIC:             False
+
+Results:
+  Total Trades:                 15
+  Trades Filtered:              24
+  Total P&L:            $          68.00
+  Win Rate:                        46.7%
+  Wins/Losses:                   7/8         
+  Avg P/L/Trade:        $           4.53
+  Max Loss:             $        -120.00
+  Volatility (σ):       $          61.76
+  Sharpe Proxy:                    1.10
+
+------------------------------------------------------------------------------------------
+OPT2: Cutoff + VIX Floor
+------------------------------------------------------------------------------------------
+Parameters:
+  Cutoff Hour:          13
+  VIX Floor:            13.0
+  RSI Always Enforced:  False
+  Use BWIC:             False
+
+Results:
+  Total Trades:                  7
+  Trades Filtered:              32
+  Total P&L:            $          55.00
+  Win Rate:                        42.9%
+  Wins/Losses:                   3/4         
+  Avg P/L/Trade:        $           7.86
+  Max Loss:             $         -55.00
+  Volatility (σ):       $          60.47
+  Sharpe Proxy:                    0.91
+
+------------------------------------------------------------------------------------------
+OPT3: All Three Fixes
+------------------------------------------------------------------------------------------
+Parameters:
+  Cutoff Hour:          13
+  VIX Floor:            13.0
+  RSI Always Enforced:  True
+  Use BWIC:             False
+
+Results:
+  Total Trades:                  7
+  Trades Filtered:              32
+  Total P&L:            $          55.00
+  Win Rate:                        42.9%
+  Wins/Losses:                   3/4         
+  Avg P/L/Trade:        $           7.86
+  Max Loss:             $         -55.00
+  Volatility (σ):       $          60.47
+  Sharpe Proxy:                    0.91
+
+------------------------------------------------------------------------------------------
+OPT3+BWIC: Full Stack
+------------------------------------------------------------------------------------------
+Parameters:
+  Cutoff Hour:          13
+  VIX Floor:            13.0
+  RSI Always Enforced:  True
+  Use BWIC:             True
+
+Results:
+  Total Trades:                  7
+  Trades Filtered:              32
+  Total P&L:            $          55.00
+  Win Rate:                        42.9%
+  Wins/Losses:                   3/4         
+  Avg P/L/Trade:        $           7.86
+  Max Loss:             $         -55.00
+  Volatility (σ):       $          60.47
+  Sharpe Proxy:                    0.91
+
+==========================================================================================
+KEY FINDINGS
+==========================================================================================
+
+Baseline (Original):
+  Trades: 23, P/L: $-219.00, WR: 34.8%
+
+Optimized (All 3 Fixes):
+  Trades: 7, P/L: $55.00, WR: 42.9%
+
+Impact Summary:
+  Trades Filtered: 16 (69.6%)
+  P/L Improvement: $+274.00 (+125.1%)
+  WR Improvement: +8.1%
+
+==========================================================================================

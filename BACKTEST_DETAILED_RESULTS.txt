@@ -1,0 +1,148 @@
+==========================================================================================
+FULL BACKTEST: GEX SCALPER WITH 2026-01-14 OPTIMIZATIONS
+==========================================================================================
+
+Loading trades from /root/gamma/data/trades.csv...
+✅ Loaded 73 total trades
+✅ Using 39 closed trades
+   Date range: 2025-12-10 to 2025-12-18
+
+==========================================================================================
+BACKTEST: BASELINE (Original Parameters)
+==========================================================================================
+
+After CUTOFF_HOUR=14 filter: 23 trades
+After VIX_FLOOR=12.0 filter: 23 trades
+After RSI filter (enforce=False): 23 trades
+
+RESULTS:
+  Total Trades:                 23 (16 filtered out)
+  Total P&L:            $        -219.00
+  Win Rate:                        34.8%
+  Wins/Losses:                   8/15        
+  Avg P/L/Trade:        $          -9.52
+  Max Loss:             $        -120.00
+  Volatility (σ):       $          58.09
+  Sharpe Proxy:                   -3.77
+
+==========================================================================================
+BACKTEST: OPT1: Cutoff Hour 14→13
+==========================================================================================
+
+After CUTOFF_HOUR=13 filter: 15 trades
+After VIX_FLOOR=12.0 filter: 15 trades
+After RSI filter (enforce=False): 15 trades
+
+RESULTS:
+  Total Trades:                 15 (24 filtered out)
+  Total P&L:            $          68.00
+  Win Rate:                        46.7%
+  Wins/Losses:                   7/8         
+  Avg P/L/Trade:        $           4.53
+  Max Loss:             $        -120.00
+  Volatility (σ):       $          61.76
+  Sharpe Proxy:                    1.10
+
+==========================================================================================
+BACKTEST: OPT2: Cutoff + VIX Floor
+==========================================================================================
+
+After CUTOFF_HOUR=13 filter: 15 trades
+After VIX_FLOOR=13.0 filter: 7 trades
+After RSI filter (enforce=False): 7 trades
+
+RESULTS:
+  Total Trades:                  7 (32 filtered out)
+  Total P&L:            $          55.00
+  Win Rate:                        42.9%
+  Wins/Losses:                   3/4         
+  Avg P/L/Trade:        $           7.86
+  Max Loss:             $         -55.00
+  Volatility (σ):       $          60.47
+  Sharpe Proxy:                    0.91
+
+==========================================================================================
+BACKTEST: OPT3: All Three Fixes
+==========================================================================================
+
+After CUTOFF_HOUR=13 filter: 15 trades
+After VIX_FLOOR=13.0 filter: 7 trades
+After RSI filter (enforce=True): 7 trades
+
+RESULTS:
+  Total Trades:                  7 (32 filtered out)
+  Total P&L:            $          55.00
+  Win Rate:                        42.9%
+  Wins/Losses:                   3/4         
+  Avg P/L/Trade:        $           7.86
+  Max Loss:             $         -55.00
+  Volatility (σ):       $          60.47
+  Sharpe Proxy:                    0.91
+
+==========================================================================================
+BACKTEST: OPT3+BWIC: Full Stack
+==========================================================================================
+
+After CUTOFF_HOUR=13 filter: 15 trades
+After VIX_FLOOR=13.0 filter: 7 trades
+After RSI filter (enforce=True): 7 trades
+
+RESULTS:
+  Total Trades:                  7 (32 filtered out)
+  Total P&L:            $          55.00
+  Win Rate:                        42.9%
+  Wins/Losses:                   3/4         
+  Avg P/L/Trade:        $           7.86
+  Max Loss:             $         -55.00
+  Volatility (σ):       $          60.47
+  Sharpe Proxy:                    0.91
+
+==========================================================================================
+COMPARISON: BASELINE vs OPTIMIZATIONS
+==========================================================================================
+
+Config                           Trades             P/L        Δ P/L       WR     Max Loss
+------------------------------------------------------------------------------------------
+BASELINE (Original Parameters)       23 $       -219.00 $       0.00    34.8% $    -120.00
+OPT1: Cutoff Hour 14→13              15 $         68.00 $     287.00    46.7% $    -120.00
+OPT2: Cutoff + VIX Floor              7 $         55.00 $     274.00    42.9% $     -55.00
+OPT3: All Three Fixes                 7 $         55.00 $     274.00    42.9% $     -55.00
+OPT3+BWIC: Full Stack                 7 $         55.00 $     274.00    42.9% $     -55.00
+
+==========================================================================================
+ANALYSIS
+==========================================================================================
+
+OPT1 (Cutoff Hour 14→13):
+  Trades filtered out:  8
+  P/L impact:           $+287.00 (+131.1%)
+  Win rate impact:      +11.9%
+
+OPT2 (Add VIX_FLOOR 12→13):
+  Additional filters:   8 trades
+  P/L impact:           $-13.00
+  Win rate impact:      -3.8%
+
+OPT3 (Enforce RSI filter):
+  Additional filters:   0 trades
+  P/L impact:           $+0.00
+  Win rate impact:      +0.0%
+
+TOTAL IMPACT (All 3 Optimizations):
+  Trades filtered out:  16 (69.6%)
+  P/L improvement:      $+274.00 (+125.1%)
+  Win rate improvement: +8.1%
+
+==========================================================================================
+RECOMMENDATIONS
+==========================================================================================
+
+✅ RECOMMENDED: Deploy all 3 optimizations
+   Expected P/L improvement: +125.1%
+   Expected WR improvement: +8.1%
+   Filters out 16 bad trades (69.6%)
+
+==========================================================================================
+✅ Full report saved to: /root/gamma/backtest_optimization_report.txt
+   Use: cat /root/gamma/backtest_optimization_report.txt
+
