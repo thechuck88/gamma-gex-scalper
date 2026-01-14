@@ -37,3 +37,4 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+market_data.db
