@@ -49,11 +49,27 @@ def simulate_intraday_price_movement(entry_price, close_price, vix, hours_to_exp
 
     # Time steps (every 15 minutes)
     dt = 0.25  # 15 minutes = 0.25 hours
+
+    # HIGH-1 FIX (2026-01-13): Validate hours_to_expiry to prevent zero n_steps
+    if hours_to_expiry <= 0:
+        return [(0.0, entry_price)]  # No time left, return entry price
+
     n_steps = int(hours_to_expiry / dt)
+    if n_steps == 0:
+        n_steps = 1  # Minimum 1 step
+
+    # CRITICAL-1 FIX (2026-01-13): Prevent division by zero if entry_price is zero
+    if entry_price == 0:
+        return [(0.0, close_price)]  # Invalid entry price, return close
 
     # Calculate drift to reach close_price
     total_return = (close_price - entry_price) / entry_price
-    drift_per_step = total_return / n_steps
+
+    # CRITICAL-2 FIX (2026-01-13): Prevent division by zero if n_steps is zero (defensive)
+    if n_steps == 0:
+        drift_per_step = 0
+    else:
+        drift_per_step = total_return / n_steps
 
     # Volatility per step (annualized VIX → intraday volatility)
     annual_vol = vix / 100
@@ -69,8 +85,15 @@ def simulate_intraday_price_movement(entry_price, close_price, vix, hours_to_exp
         # Random shock with drift toward target
         shock = np.random.normal(drift_per_step, vol_per_step)
 
-        # Bias toward close price (mean reversion)
-        target_drift = (close_price - prev_price) / prev_price / (n_steps - i)
+        # CRITICAL-3 FIX (2026-01-13): Prevent division by zero in drift calculation
+        if prev_price == 0:
+            target_drift = 0  # Invalid price, no drift
+        elif (n_steps - i) == 0:
+            target_drift = 0  # Last step, no drift needed
+        else:
+            # Bias toward close price (mean reversion)
+            target_drift = (close_price - prev_price) / prev_price / (n_steps - i)
+
         combined_drift = 0.7 * drift_per_step + 0.3 * target_drift
 
         new_price = prev_price * (1 + combined_drift + shock * 0.5)
@@ -96,7 +119,15 @@ def calculate_profit_pct(current_price, entry_credit, strikes, strategy, is_long
     - Maximum loss = (spread_width - credit) / credit
     """
 
-    strikes_list = [int(s) for s in strikes.split('/')]
+    # HIGH-3 FIX (2026-01-13): Validate strikes parsing
+    try:
+        if not isinstance(strikes, str):
+            raise ValueError(f"Strikes must be string, got {type(strikes)}")
+        strikes_list = [int(s) for s in strikes.split('/')]
+        if len(strikes_list) < 2:
+            raise ValueError(f"Strikes must have at least 2 values, got {len(strikes_list)}")
+    except (ValueError, AttributeError) as e:
+        raise ValueError(f"Invalid strikes format '{strikes}': {e}")
 
     if strategy == 'CALL':
         short_strike = min(strikes_list)
@@ -116,9 +147,18 @@ def calculate_profit_pct(current_price, entry_credit, strikes, strategy, is_long
 
     else:  # IC
         strikes_sorted = sorted(strikes_list)
+
+        # HIGH-5 FIX (2026-01-13): Validate IC has at least 4 strikes
+        if len(strikes_sorted) < 4:
+            raise ValueError(f"IC strategy requires 4 strikes, got {len(strikes_sorted)}")
+
         put_short = strikes_sorted[1]
         call_short = strikes_sorted[2]
-        spread_width = (strikes_sorted[2] - strikes_sorted[1]) - (strikes_sorted[1] - strikes_sorted[0])
+        # IC spread width is the wing width (same for both sides)
+        # strikes_sorted: [put_long, put_short, call_short, call_long]
+        put_width = strikes_sorted[1] - strikes_sorted[0]
+        call_width = strikes_sorted[3] - strikes_sorted[2]
+        spread_width = max(put_width, call_width)  # Use wider wing for conservative calculation
 
         # Closest threat
         distance = min(current_price - put_short, call_short - current_price)
@@ -139,8 +179,12 @@ def calculate_profit_pct(current_price, entry_credit, strikes, strategy, is_long
     elif distance >= 0:
         profit_pct = 0.20 * (distance / 10)  # Threatened
     else:
-        # ITM - losing
-        profit_pct = -abs(distance) / spread_width
+        # CRITICAL-4 FIX (2026-01-13): Prevent division by zero if spread_width is zero
+        if spread_width == 0:
+            profit_pct = -1.0  # Max loss for zero-width spread
+        else:
+            # ITM - losing
+            profit_pct = -abs(distance) / spread_width
 
     return profit_pct
 
@@ -208,6 +252,16 @@ def run_progressive_hold_backtest(df, enable_progressive_hold=True):
         strikes = row['strikes']
         strategy = row['strategy']
         confidence = row['confidence']
+
+        # HIGH-4 FIX (2026-01-13): Validate input values
+        if pd.isna(entry_price) or entry_price <= 0:
+            continue  # Skip invalid entry price
+        if pd.isna(close_price) or close_price <= 0:
+            continue  # Skip invalid close price
+        if pd.isna(vix) or vix < 0:
+            vix = 15.0  # Use default VIX if missing or invalid
+        if pd.isna(entry_credit) or entry_credit <= 0:
+            continue  # Skip invalid credit
 
         # Parse entry distance
         strikes_list = [int(s) for s in strikes.split('/')]
@@ -330,7 +384,13 @@ def run_progressive_hold_backtest(df, enable_progressive_hold=True):
     print(f"\n" + "-"*70)
     print("RESULTS:")
     print("-"*70)
-    print(f"  Positions held to expiration: {held_count} ({held_count/len(tp_trades)*100:.1f}% of TP trades)")
+
+    # CRITICAL-5 FIX (2026-01-13): Prevent division by zero if no TP trades
+    if len(tp_trades) > 0:
+        held_pct = held_count / len(tp_trades) * 100
+        print(f"  Positions held to expiration: {held_count} ({held_pct:.1f}% of TP trades)")
+    else:
+        print(f"  Positions held to expiration: {held_count} (N/A% - no TP trades)")
 
     if held_count > 0:
         print(f"  Hold success rate: {hold_success_rate*100:.1f}%")
@@ -440,10 +500,17 @@ def visualize_results(results, output_file='/root/gamma/progressive_hold_compari
 
     for bar, pnl in zip(bars, pnls):
         height = bar.get_height()
-        improvement = ((pnl / pnls[0]) - 1) * 100
-        ax1.text(bar.get_x() + bar.get_width()/2., height,
-                f'${pnl:.1f}k\n({improvement:+.1f}%)',
-                ha='center', va='bottom', fontsize=10, fontweight='bold')
+
+        # HIGH-2 FIX (2026-01-13): Prevent division by zero if baseline P&L is zero
+        if pnls[0] != 0:
+            improvement = ((pnl / pnls[0]) - 1) * 100
+            ax1.text(bar.get_x() + bar.get_width()/2., height,
+                    f'${pnl:.1f}k\n({improvement:+.1f}%)',
+                    ha='center', va='bottom', fontsize=10, fontweight='bold')
+        else:
+            ax1.text(bar.get_x() + bar.get_width()/2., height,
+                    f'${pnl:.1f}k\n(N/A%)',
+                    ha='center', va='bottom', fontsize=10, fontweight='bold')
 
     ax1.set_ylabel('Total P&L ($1000s)', fontsize=11)
     ax1.set_title('Total P&L Comparison', fontsize=12, fontweight='bold')
@@ -520,7 +587,21 @@ def visualize_results(results, output_file='/root/gamma/progressive_hold_compari
 if __name__ == "__main__":
     # Load backtest data
     print("Loading backtest data...")
-    df = pd.read_csv('/root/gamma/data/backtest_results.csv')
+
+    # HIGH-6 FIX (2026-01-13): Add exception handling for CSV file loading
+    try:
+        df = pd.read_csv('/root/gamma/data/backtest_results.csv')
+    except FileNotFoundError:
+        print("ERROR: Backtest results file not found: /root/gamma/data/backtest_results.csv")
+        print("Please run backtest.py first to generate the results file.")
+        exit(1)
+    except Exception as e:
+        print(f"ERROR: Failed to load backtest results: {e}")
+        exit(1)
+
+    if df.empty:
+        print("ERROR: Backtest results file is empty")
+        exit(1)
 
     # Run comparison
     results = compare_strategies(df)

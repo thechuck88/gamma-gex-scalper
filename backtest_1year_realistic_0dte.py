@@ -4,7 +4,7 @@
 Corrected credit ranges based on actual 0DTE option pricing
 """
 import sys
-sys.path.insert(0, '/gamma-scalper')
+sys.path.insert(0, '/root/gamma')
 
 from index_config import get_index_config
 import random

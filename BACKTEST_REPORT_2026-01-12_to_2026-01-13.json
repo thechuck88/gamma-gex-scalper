@@ -1,0 +1,159 @@
+{
+  "metadata": {
+    "report_date": "2026-01-14T09:59:10.127459",
+    "backtest_period": {
+      "start": "2026-01-12",
+      "end": "2026-01-13",
+      "duration_days": 2
+    },
+    "database": "/gamma-scalper/data/gex_blackbox.db",
+    "index_symbol": "SPX"
+  },
+  "parameters": {
+    "starting_balance": 100000.0,
+    "vix_floor": 12.0,
+    "vix_ceiling": 30.0,
+    "min_entry_credit": 1.5,
+    "stop_loss_percent": 0.1,
+    "profit_target_percent": 0.5,
+    "trailing_stop_enabled": true,
+    "entry_times_et": [
+      "9:36 AM",
+      "10:00 AM",
+      "10:30 AM",
+      "11:00 AM",
+      "11:30 AM",
+      "12:00 PM",
+      "12:30 PM",
+      "1:00 PM"
+    ]
+  },
+  "summary": {
+    "total_trades": 6,
+    "winning_trades": 6,
+    "losing_trades": 0,
+    "break_even_trades": 0,
+    "win_rate_percent": 100.0
+  },
+  "pnl": {
+    "total_pnl": 976.9,
+    "average_win": 162.82,
+    "average_loss": 0.0,
+    "max_win": 444.1,
+    "max_loss": 0.0,
+    "profit_factor": 0.0
+  },
+  "account": {
+    "starting_balance": 100000.0,
+    "ending_balance": 100976.9,
+    "peak_balance": 100976.9,
+    "net_profit_loss": 976.9,
+    "return_percent": 0.98,
+    "max_drawdown": 0.0,
+    "max_drawdown_percent": 0.0
+  },
+  "trades": [
+    {
+      "trade_id": 1,
+      "type": "CALL",
+      "entry_time": "2026-01-12T14:36:00",
+      "exit_time": "2026-01-12T14:36:00",
+      "entry_credit": 0.35,
+      "exit_spread_value": 0.0045,
+      "pnl_dollars": 34.55,
+      "pnl_percent": 98.71,
+      "exit_reason": "PROFIT_TARGET",
+      "short_strike": 6985.0,
+      "long_strike": 6990.0,
+      "vix_at_entry": 14.56,
+      "index_symbol": "SPX",
+      "is_iron_condor": false,
+      "peak_rank": 1
+    },
+    {
+      "trade_id": 2,
+      "type": "CALL",
+      "entry_time": "2026-01-12T14:36:00",
+      "exit_time": "2026-01-12T14:36:00",
+      "entry_credit": 0.05,
+      "exit_spread_value": 0.0015,
+      "pnl_dollars": 4.85,
+      "pnl_percent": 97.0,
+      "exit_reason": "PROFIT_TARGET",
+      "short_strike": 6990.0,
+      "long_strike": 6995.0,
+      "vix_at_entry": 14.56,
+      "index_symbol": "SPX",
+      "is_iron_condor": false,
+      "peak_rank": 2
+    },
+    {
+      "trade_id": 3,
+      "type": "PUT",
+      "entry_time": "2026-01-13T14:36:00",
+      "exit_time": "2026-01-13T14:36:00",
+      "entry_credit": 0.25,
+      "exit_spread_value": 0.0035,
+      "pnl_dollars": 24.65,
+      "pnl_percent": 98.6,
+      "exit_reason": "PROFIT_TARGET",
+      "short_strike": 6960.0,
+      "long_strike": 6955.0,
+      "vix_at_entry": 15.49,
+      "index_symbol": "SPX",
+      "is_iron_condor": false,
+      "peak_rank": 1
+    },
+    {
+      "trade_id": 4,
+      "type": "PUT",
+      "entry_time": "2026-01-13T14:36:00",
+      "exit_time": "2026-01-13T14:36:00",
+      "entry_credit": 4.5,
+      "exit_spread_value": 0.059,
+      "pnl_dollars": 444.1,
+      "pnl_percent": 98.69,
+      "exit_reason": "PROFIT_TARGET",
+      "short_strike": 6970.0,
+      "long_strike": 6965.0,
+      "vix_at_entry": 15.49,
+      "index_symbol": "SPX",
+      "is_iron_condor": false,
+      "peak_rank": 2
+    },
+    {
+      "trade_id": 5,
+      "type": "PUT",
+      "entry_time": "2026-01-14T14:36:00",
+      "exit_time": "2026-01-14T14:36:00",
+      "entry_credit": 0.25,
+      "exit_spread_value": 0.0035,
+      "pnl_dollars": 24.65,
+      "pnl_percent": 98.6,
+      "exit_reason": "PROFIT_TARGET",
+      "short_strike": 6960.0,
+      "long_strike": 6955.0,
+      "vix_at_entry": 15.49,
+      "index_symbol": "SPX",
+      "is_iron_condor": false,
+      "peak_rank": 1
+    },
+    {
+      "trade_id": 6,
+      "type": "PUT",
+      "entry_time": "2026-01-14T14:36:00",
+      "exit_time": "2026-01-14T14:36:00",
+      "entry_credit": 4.5,
+      "exit_spread_value": 0.059,
+      "pnl_dollars": 444.1,
+      "pnl_percent": 98.69,
+      "exit_reason": "PROFIT_TARGET",
+      "short_strike": 6970.0,
+      "long_strike": 6965.0,
+      "vix_at_entry": 15.49,
+      "index_symbol": "SPX",
+      "is_iron_condor": false,
+      "peak_rank": 2
+    }
+  ]
+}

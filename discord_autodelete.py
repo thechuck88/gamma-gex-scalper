@@ -167,29 +167,36 @@ class DiscordAutoDelete:
             # Format: DELETE /webhooks/{webhook.id}/{webhook.token}/messages/{message.id}
             delete_url = f"{message.webhook_url}/messages/{message.message_id}"
 
+            logger.info(f"[DELETE] Attempting to delete message {message.message_id[:12]}...")
+            logger.debug(f"[DELETE] URL: {delete_url[:80]}...")
+
             response = requests.delete(delete_url, timeout=10)
+
+            logger.debug(f"[DELETE] Response status: {response.status_code}")
 
             if response.status_code == 204:
                 logger.info(
-                    f"Deleted Discord message {message.message_id[:8]} "
+                    f"[DELETE] ✅ Deleted Discord message {message.message_id[:12]} "
                     f"(type={message.message_type}, age={int(time.time() - message.posted_at)}s)"
                 )
                 return True
             elif response.status_code == 404:
-                logger.debug(f"Message {message.message_id[:8]} already deleted")
+                logger.info(f"[DELETE] ⚠️  Message {message.message_id[:12]} already deleted (404)")
                 return True  # Consider already-deleted as success
             else:
                 logger.warning(
-                    f"Failed to delete message {message.message_id[:8]}: "
-                    f"HTTP {response.status_code}"
+                    f"[DELETE] ❌ Failed to delete message {message.message_id[:12]}: "
+                    f"HTTP {response.status_code} - {response.text[:100]}"
                 )
                 return False
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error deleting Discord message {message.message_id[:8]}: {e}")
+            logger.error(f"[DELETE] ❌ Network error deleting message {message.message_id[:12]}: {e}")
             return False
         except Exception as e:
-            logger.error(f"Unexpected error deleting message: {e}")
+            logger.error(f"[DELETE] ❌ Unexpected error deleting message {message.message_id[:12]}: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def cleanup_old_messages(self):
@@ -198,25 +205,43 @@ class DiscordAutoDelete:
         deleted_count = 0
         failed_count = 0
 
+        logger.info(f"[CLEANUP] Starting cleanup check (total messages: {len(self.messages)})")
+
         with self.lock:
             messages_to_delete = []
             messages_to_keep = []
 
             for msg in self.messages:
                 age = now - msg.posted_at
+                expires_at = msg.posted_at + msg.ttl_seconds
+                time_until_expire = expires_at - now
+
                 if age >= msg.ttl_seconds:
+                    logger.info(
+                        f"[CLEANUP] Message {msg.message_id[:12]} EXPIRED "
+                        f"(age={int(age)}s, ttl={msg.ttl_seconds}s, over by {int(age - msg.ttl_seconds)}s)"
+                    )
                     messages_to_delete.append(msg)
                 else:
+                    logger.info(
+                        f"[CLEANUP] Message {msg.message_id[:12]} not expired yet "
+                        f"(age={int(age)}s, ttl={msg.ttl_seconds}s, expires in {int(time_until_expire)}s)"
+                    )
                     messages_to_keep.append(msg)
+
+            logger.info(f"[CLEANUP] Found {len(messages_to_delete)} expired messages to delete")
 
             # Attempt to delete expired messages
             for msg in messages_to_delete:
+                logger.info(f"[CLEANUP] Deleting expired message {msg.message_id[:12]}...")
                 if self.delete_message(msg):
                     deleted_count += 1
+                    logger.info(f"[CLEANUP] ✅ Successfully deleted {msg.message_id[:12]}")
                 else:
                     # Keep messages that failed to delete for retry
                     messages_to_keep.append(msg)
                     failed_count += 1
+                    logger.warning(f"[CLEANUP] ❌ Failed to delete {msg.message_id[:12]}, will retry")
 
             # Update tracked messages
             self.messages = messages_to_keep
@@ -224,27 +249,38 @@ class DiscordAutoDelete:
 
         if deleted_count > 0 or failed_count > 0:
             logger.info(
-                f"Cleanup: deleted {deleted_count} messages, "
-                f"{failed_count} failed, {len(self.messages)} remaining"
+                f"[CLEANUP] Completed: deleted {deleted_count}, failed {failed_count}, remaining {len(self.messages)}"
             )
+        else:
+            logger.debug(f"[CLEANUP] No expired messages to delete")
 
     def _cleanup_loop(self):
         """Background thread loop for periodic cleanup"""
-        logger.info("Discord auto-delete cleanup thread started")
+        logger.info("[THREAD] Discord auto-delete cleanup thread started")
+        logger.info(f"[THREAD] Storage file: {self.storage_file}")
+        logger.info(f"[THREAD] Will check for expired messages every 60 seconds")
+
+        iteration = 0
 
         while self.running:
             try:
+                iteration += 1
+                logger.info(f"[THREAD] Cleanup iteration #{iteration} - checking for expired messages...")
                 self.cleanup_old_messages()
+                logger.debug(f"[THREAD] Iteration #{iteration} complete, sleeping 60s...")
             except Exception as e:
-                logger.error(f"Error in cleanup loop: {e}")
+                logger.error(f"[THREAD] ❌ Error in cleanup loop iteration #{iteration}: {e}")
+                import traceback
+                traceback.print_exc()
 
             # Sleep for 60 seconds between cleanup runs
-            for _ in range(60):
+            for i in range(60):
                 if not self.running:
+                    logger.info(f"[THREAD] Stop signal received, exiting...")
                     break
                 time.sleep(1)
 
-        logger.info("Discord auto-delete cleanup thread stopped")
+        logger.info("[THREAD] Discord auto-delete cleanup thread stopped")
 
     def start_cleanup_thread(self):
         """Start background thread for automatic cleanup"""

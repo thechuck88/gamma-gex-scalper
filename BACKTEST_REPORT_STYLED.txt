@@ -1,0 +1,71 @@
+
+================================================================================
+  GAMMA GEX SCALPER — REPLAY HARNESS BACKTEST REPORT
+================================================================================
+
+  Period:              2026-01-12 to 2026-01-14
+  Index:               SPX (0DTE Credit Spreads)
+  Database:            /gamma-scalper/data/gex_blackbox.db
+  Data Granularity:    30-second snapshots
+
+  Summary:             6W / 0L / 100%       | Total P&L: $ +976.90
+================================================================================
+
+  CONFIGURATION
+  ------------------------------------------------------------------------------
+    VIX Floor                 12.0
+    VIX Ceiling               30.0
+    Min Entry Credit          $1.50
+    Stop Loss                 10%
+    Profit Target             50%
+    Trailing Stop             Enabled
+    Starting Balance          $100,000
+
+  TRADE HISTORY
+  ------------------------------------------------------------------------------
+
+  Opened           Closed           Type        Entry     Exit          P/L        % Reason                  
+  ---------------- ---------------- -------- -------- -------- ------------ -------- ------------------------
+  01/12 14:36      14:36            CALL        $0.35    $0.00     $ +34.55   +98.7% PROFIT_TARGET           
+  01/12 14:36      14:36            CALL        $0.05    $0.00     $  +4.85   +97.0% PROFIT_TARGET           
+  01/13 14:36      14:36            PUT         $0.25    $0.00     $ +24.65   +98.6% PROFIT_TARGET           
+  01/13 14:36      14:36            PUT         $4.50    $0.06     $+444.10   +98.7% PROFIT_TARGET           
+  01/14 14:36      14:36            PUT         $0.25    $0.00     $ +24.65   +98.6% PROFIT_TARGET           
+  01/14 14:36      14:36            PUT         $4.50    $0.06     $+444.10   +98.7% PROFIT_TARGET           
+
+  DAILY BREAKDOWN
+  ------------------------------------------------------------------------------
+
+  Date         Trades   Wins    Win %    Daily P/L
+  ------------ ------ ------ -------- ------------
+  2026-01-12        2      2   100.0%     $ +39.40
+  2026-01-13        2      2   100.0%     $+468.75
+  2026-01-14        2      2   100.0%     $+468.75
+
+  PERFORMANCE SUMMARY
+  ------------------------------------------------------------------------------
+
+  Total Trades:
+    6 total | 6 winners | 0 losers | 0 break-even
+
+  Win Rate & P/L:
+    Win Rate:           100.0%
+    Total P/L:         $  +976.90
+    Average Win:       $  +162.82
+    Average Loss:      $    +0.00
+    Largest Win:       $  +444.10
+    Largest Loss:      $    +0.00
+
+  Risk Metrics:
+    Profit Factor:       0.00x
+    Max Drawdown:      $    +0.00
+
+  Account:
+    Starting Balance:  $100,000.00
+    Ending Balance:    $100,976.90
+    Peak Balance:      $100,976.90
+    Return on Capital:       0.98%
+
+================================================================================
+Generated: 2026-01-14 10:04:06
+================================================================================

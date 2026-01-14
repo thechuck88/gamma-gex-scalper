@@ -7,7 +7,7 @@ Uses: core.gex_strategy (single source of truth)
 This ensures backtest and live scalper use IDENTICAL trade setup logic.
 
 Changes from backtest.py:
-- Data source: /gamma-scalper/data/gex_blackbox.db (real GEX PIN data)
+- Data source: /root/gamma/data/gex_blackbox.db (real GEX PIN data)
 - Entry times: All 8 actual times (9:36, 10:00, 10:30, 11:00, 11:30, 12:00, 12:30, 1:00 PM)
 - GEX Pin: Real PIN strikes from database (not simplified proxy)
 - Timestamps: UTC→ET conversion for correct timing
@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 from collections import defaultdict
 
-DB_PATH = "/gamma-scalper/data/gex_blackbox.db"
+DB_PATH = "/root/gamma/data/gex_blackbox.db"
 
 # ============================================================================
 # STRATEGY PARAMETERS (From canonical backtest.py)

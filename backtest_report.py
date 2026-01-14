@@ -13,7 +13,7 @@ import sys
 from datetime import datetime, date, time as dt_time
 from collections import defaultdict
 
-sys.path.insert(0, '/gamma-scalper')
+sys.path.insert(0, '/root/gamma')
 from backtest_live_data import (
     get_gex_peaks_for_time, get_live_prices, get_index_price_at_time,
     determine_strategy, simulate_trade, ENTRY_TIMES,

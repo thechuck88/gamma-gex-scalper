@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 import statistics
 
-DB_PATH = "/gamma-scalper/data/gex_blackbox.db"
+DB_PATH = "/root/gamma/data/gex_blackbox.db"
 
 ENTRY_TIMES_ET = ["09:36", "10:00", "10:30", "11:00", "11:30", "12:00", "12:30", "13:00"]
 CUTOFF_HOURS = [13, 14]

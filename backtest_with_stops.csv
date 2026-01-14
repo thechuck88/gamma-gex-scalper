@@ -1,0 +1,2 @@
+trade_date,entry_time,exit_time,exit_reason,option_type,short_strike,long_strike,spread_width,entry_credit,exit_cost,profit,profit_pct,win,stop_loss_hit,profit_target_hit,held_to_expiration
+2025-04-14,10:00,13:30,STOP_LOSS,C,5395.0,5400.0,5.0,3.0,4.030000000000001,-1.0300000000000011,-34.33333333333337,False,True,False,False

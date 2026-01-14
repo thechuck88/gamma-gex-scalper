@@ -1,0 +1,33 @@
+{
+  "timestamp": "2026-01-14T07:54:20.185827",
+  "period": "past_12_months",
+  "trades_analyzed": 39,
+  "bugfix": "Excluded 34 unclosed trades (NaN P/L)",
+  "normal_ic": {
+    "total_pnl": -493.0,
+    "trades": 39,
+    "win_rate": 23.076923076923077,
+    "max_loss": -120.0,
+    "sharpe_proxy": -9.056227418454766
+  },
+  "bwic": {
+    "total_pnl": -484.52,
+    "trades": 39,
+    "win_rate": 23.076923076923077,
+    "max_loss": -116.39999999999999,
+    "sharpe_proxy": -8.84262613117394
+  },
+  "comparison": {
+    "pnl_difference": 8.480000000000018,
+    "pnl_pct_change": 1.7200811359026407,
+    "wr_difference": 0.0,
+    "max_loss_improvement_pct": 3.000000000000007,
+    "sharpe_improvement_pct": 2.3586122279300223
+  },
+  "validation": {
+    "live_trades": 39,
+    "live_win_rate": 23.076923076923077,
+    "live_total_pnl": -493.0,
+    "backtest_matches_live": true
+  }
+}

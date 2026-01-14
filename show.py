@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """
 show.py — Display current option positions and P/L status
+
+ARCHITECTURE: Broker API is authoritative source for open positions
+- Positions are queried directly from Tradier broker API
+- Orders tracking file is used only for metadata (TP/SL, confidence, trailing stop)
+- Ensures display always reflects true account state, even if tracking out of sync
+- Prevents "phantom" positions from being displayed if reconciliation recovered them
+
 Usage:
-  python show.py                    # Show paper account
-  python show.py LIVE               # Show live account
+  python show.py                    # Show paper account (from broker API)
+  python show.py LIVE               # Show live account (from broker API)
   python show.py ALL                # Show both accounts
   python show.py --history 7        # Show last 7 days of closed trades
   python show.py --history 30       # Show last 30 days
@@ -421,8 +428,21 @@ def find_order_for_symbols(orders, symbols):
 
 
 def show_account(name, account_id, api_key, base_url):
-    """Display positions for an account."""
+    """Display positions for an account.
+
+    ARCHITECTURE: Broker API is the source of truth for open positions
+    - positions: Fetched directly from broker API (authoritative)
+    - orders: Loaded from tracking file (metadata only: TP/SL, confidence, etc.)
+
+    This ensures show.py always displays the true account state from the broker,
+    even if the tracking file is out of sync (e.g., orphaned positions that were
+    recovered by the monitor's reconciliation system).
+    """
+    # Fetch positions directly from broker API (source of truth)
     positions = get_positions(account_id, api_key, base_url)
+
+    # Load tracked orders for metadata matching (TP/SL targets, confidence, trailing stop status)
+    # If a position exists in broker but not in orders, we still display it (won't have metadata)
     orders = load_orders(name)
 
     print(f"\n{'='*70}")
@@ -437,33 +457,44 @@ def show_account(name, account_id, api_key, base_url):
     symbols = [p['symbol'] for p in positions]
     quotes = get_quotes(symbols, api_key, base_url)
 
-    # Group positions by date_acquired (spreads opened together)
+    # Group positions by date_acquired and symbol root (spreads opened together on same index)
     groups = defaultdict(list)
     for pos in positions:
         date_acquired = pos.get('date_acquired', '')
         _, key = parse_date_acquired(date_acquired)
-        groups[key].append(pos)
 
-    # Sort groups by time (most recent first)
-    sorted_groups = sorted(groups.items(), key=lambda x: x[0], reverse=True)
+        # Extract symbol root for sub-grouping (e.g., NDXP or SPXW)
+        symbol = pos['symbol']
+        opt = parse_option_symbol(symbol)
+        symbol_root = opt['root'] if opt else symbol.split()[0]
+
+        # Create group key as (time, symbol_root)
+        group_key = (key, symbol_root)
+        groups[group_key].append(pos)
+
+    # Sort groups by time (most recent first), then by symbol root
+    sorted_groups = sorted(groups.items(), key=lambda x: (x[0][0], x[0][1]), reverse=True)
 
     total_pl = 0
 
-    print(f"\n  {'Symbol':<30} {'Qty':>5} {'Cost':>10} {'Current':>10} {'P/L':>12} {'Opened':<16}")
-    print(f"  {'-'*30} {'-'*5} {'-'*10} {'-'*10} {'-'*12} {'-'*16}")
+    print(f"\n  {'Symbol':<30} {'Qty':>5} {'Cost':>10} {'Current':>10} {'P/L':>12} {'% P/L':>7} {'Opened':<16}")
+    print(f"  {'-'*30} {'-'*5} {'-'*10} {'-'*10} {'-'*12} {'-'*7} {'-'*16}")
 
-    for group_time, group_positions in sorted_groups:
+    for (group_time, symbol_root), group_positions in sorted_groups:
         group_pl = 0
         group_entry_credit = 0  # Total credit received for spread
         group_current_value = 0  # Current cost to close spread
         group_symbols = []  # Collect symbols for order matching
+        group_strikes = []  # Collect strikes for spread width calculation
         group_lines = []
+        num_contracts = 0  # Number of contracts in spread
         is_spread = len(group_positions) > 1
 
         for pos in group_positions:
             symbol = pos['symbol']
             group_symbols.append(symbol)
             qty = int(pos['quantity'])
+            num_contracts = max(num_contracts, abs(qty))  # Track contract size
             cost_basis = float(pos['cost_basis'])
             date_acquired = pos.get('date_acquired', '')
             opened_str, _ = parse_date_acquired(date_acquired)
@@ -472,6 +503,7 @@ def show_account(name, account_id, api_key, base_url):
             opt = parse_option_symbol(symbol)
             if opt:
                 display = f"{opt['root']} {opt['expiry'][-5:]} ${opt['strike']:.0f}{opt['type'][0]}"
+                group_strikes.append(opt['strike'])  # Track strikes for spread width
             else:
                 display = symbol
 
@@ -489,6 +521,18 @@ def show_account(name, account_id, api_key, base_url):
             pl = current_value - cost_basis
             cost_per = abs(cost_basis / qty / multiplier) if qty != 0 else 0
 
+            # Calculate percent change
+            if cost_basis != 0:
+                pl_pct = (pl / abs(cost_basis)) * 100
+            else:
+                pl_pct = 0
+
+            # Color code the percentage
+            if pl_pct >= 0:
+                pct_color_str = f"\033[32m{pl_pct:>+6.1f}%\033[0m"
+            else:
+                pct_color_str = f"\033[31m{pl_pct:>6.1f}%\033[0m"
+
             # Track entry credit and current value for spread (options only)
             if is_option:
                 # Short positions: cost_basis is negative (credit received)
@@ -501,7 +545,17 @@ def show_account(name, account_id, api_key, base_url):
             group_pl += pl
             total_pl += pl
 
-            group_lines.append(f"  {display:<30} {qty:>+5} ${cost_per:>8.2f} ${mid:>8.2f} {format_pl(pl)} {opened_str:<16}")
+            # For spreads, hide individual leg P/L and percentages
+            # Only show P/L and % at the spread subtotal level
+            if is_spread:
+                # Spreads: suppress individual leg P/L and %
+                pl_str = " " * 12  # Blank spaces for P/L column
+                pct_color_str = ""
+            else:
+                # Single leg: show P/L normally
+                pl_str = format_pl(pl)
+
+            group_lines.append(f"  {display:<30} {qty:>+5} ${cost_per:>8.2f} ${mid:>8.2f} {pl_str} {pct_color_str:<7} {opened_str:<16}")
 
         # Print group
         for line in group_lines:
@@ -509,18 +563,65 @@ def show_account(name, account_id, api_key, base_url):
 
         # Print subtotal if more than one position in group (spread)
         if is_spread and group_entry_credit != 0:
-            # profit % = P/L / entry_credit
-            profit_pct = (group_pl / group_entry_credit) * 100
-            # Current cost to close (per contract, divide by 100)
-            current_cost = abs(group_current_value) / 100
+            # Identify spread type (CALL, PUT, or IC)
+            spread_type = "SPREAD"
+            call_count = 0
+            put_count = 0
+
+            for pos in group_positions:
+                symbol = pos['symbol']
+                opt = parse_option_symbol(symbol)
+                if opt:
+                    if opt['type'] == 'CALL':
+                        call_count += 1
+                    elif opt['type'] == 'PUT':
+                        put_count += 1
+
+            # Classify spread type
+            if call_count > 0 and put_count > 0:
+                spread_type = "IC"  # Iron Condor (has both calls and puts)
+            elif call_count > 0:
+                spread_type = "CALL"  # Call spread
+            elif put_count > 0:
+                spread_type = "PUT"  # Put spread
+
+            # For spread, show the net credit/debit per contract per share
+            # group_entry_credit is in dollars (sum of all positions)
+            # Divide by number of contracts and 100 to get per-share price
+            if num_contracts > 0:
+                entry_per = group_entry_credit / num_contracts / 100  # Per-contract, per-share price
+                current_spread_value = abs(group_current_value) / num_contracts / 100  # Per-contract, per-share price
+            else:
+                entry_per = 0
+                current_spread_value = 0
+
+            # Calculate % of max risk (more intuitive than % of credit)
+            # Max risk = spread width - credit received per share
+            if group_strikes and len(group_strikes) >= 2:
+                spread_width = abs(max(group_strikes) - min(group_strikes))  # Width in points
+                max_loss_per_share = spread_width - entry_per  # Max loss per share (in dollars)
+                max_loss_total = max_loss_per_share * num_contracts * 100  # Total max loss
+
+                if max_loss_total > 0:
+                    # Current loss as % of max possible loss
+                    # If profit, show positive; if loss, show negative
+                    profit_pct = (group_pl / max_loss_total) * 100
+                else:
+                    profit_pct = 0
+            else:
+                # Fallback: show as % of credit
+                if group_entry_credit != 0:
+                    profit_pct = (group_pl / group_entry_credit) * 100
+                else:
+                    profit_pct = 0
 
             if profit_pct >= 0:
-                pct_str = f"\033[32m{profit_pct:>+.0f}% profit\033[0m"
+                pct_str = f"\033[32m{profit_pct:>+6.1f}%\033[0m"
             else:
-                pct_str = f"\033[31m{profit_pct:>.0f}% loss\033[0m"
+                pct_str = f"\033[31m{profit_pct:>6.1f}%\033[0m"
 
-            entry_per = group_entry_credit / 100  # Entry credit per contract
-            print(f"  {'  └─ Subtotal':<30} {'':>5} ${entry_per:>8.2f} ${current_cost:>8.2f} {format_pl(group_pl)} ({pct_str})")
+            subtotal_label = f"  └─ {symbol_root} {spread_type}"
+            print(f"  {subtotal_label:<30} {'':>5} ${entry_per:>8.2f} ${current_spread_value:>8.2f} {format_pl(group_pl)} {pct_str}")
 
             # Find matching order and show TP/SL targets
             order = find_order_for_symbols(orders, group_symbols)
@@ -550,8 +651,8 @@ def show_account(name, account_id, api_key, base_url):
             print()
 
     # Grand total
-    print(f"  {'-'*30} {'-'*5} {'-'*10} {'-'*10} {'-'*12}")
-    print(f"  {'TOTAL':<30} {'':>5} {'':>10} {'':>10} {format_pl(total_pl)}")
+    print(f"  {'-'*30} {'-'*5} {'-'*10} {'-'*10} {'-'*12} {'-'*7}")
+    print(f"  {'TOTAL':<30} {'':>5} {'':>10} {'':>10} {format_pl(total_pl)} {'':>7}")
 
 def show_closed_trades(days=None, account_mode="PAPER", account_id=None):
     """Display closed trades from trades.csv.
@@ -594,31 +695,56 @@ def show_closed_trades(days=None, account_mode="PAPER", account_id=None):
 
     try:
         with open(trade_log, 'r') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                exit_time = row.get('Exit_Time', '')
-                if not exit_time:
-                    continue
+            lines = f.readlines()
 
-                # Filter by account_id (if mode is not ALL)
-                if account_mode != "ALL" and account_id:
-                    row_account_id = row.get('Account_ID', '')
-                    if row_account_id and row_account_id != account_id:
-                        continue  # Skip trades from other accounts
+        for line in lines:
+            # Parse CSV line to handle both old (14-field) and new (15-field) formats
+            fields = line.strip().split(',')
 
-                # Filter by date range
-                if cutoff_date is None:
-                    # Today only
-                    if exit_time.startswith(today_str):
+            # Old format (14 fields): TP%, Exit_Time, Exit_Value, ...
+            # New format (15 fields): TP%, Contracts, Exit_Time, Exit_Value, ...
+            if len(fields) < 10:
+                continue
+
+            if len(fields) == 14:
+                # Old format - insert None for Contracts field
+                fieldnames = ['Timestamp_ET','Trade_ID','Account_ID','Strategy','Strikes',
+                             'Entry_Credit','Confidence','TP%','Exit_Time','Exit_Value',
+                             'P/L_$','P/L_%','Exit_Reason','Duration_Min']
+                row = {k: v for k, v in zip(fieldnames, fields)}
+                row['Contracts'] = '10'  # Assume old trades were 10 contracts (default)
+            elif len(fields) == 15:
+                # New format with Contracts field
+                fieldnames = ['Timestamp_ET','Trade_ID','Account_ID','Strategy','Strikes',
+                             'Entry_Credit','Confidence','TP%','Contracts','Exit_Time','Exit_Value',
+                             'P/L_$','P/L_%','Exit_Reason','Duration_Min']
+                row = {k: v for k, v in zip(fieldnames, fields)}
+            else:
+                continue  # Skip malformed rows
+
+            exit_time = row.get('Exit_Time', '')
+            if not exit_time:
+                continue
+
+            # Filter by account_id (if mode is not ALL)
+            if account_mode != "ALL" and account_id:
+                row_account_id = row.get('Account_ID', '')
+                if row_account_id and row_account_id != account_id:
+                    continue  # Skip trades from other accounts
+
+            # Filter by date range
+            if cutoff_date is None:
+                # Today only
+                if exit_time.startswith(today_str):
+                    closed_trades.append(row)
+            else:
+                # Date range or all
+                try:
+                    exit_dt = datetime.strptime(exit_time, '%Y-%m-%d %H:%M:%S').replace(tzinfo=ET)
+                    if exit_dt >= cutoff_date:
                         closed_trades.append(row)
-                else:
-                    # Date range or all
-                    try:
-                        exit_dt = datetime.strptime(exit_time, '%Y-%m-%d %H:%M:%S').replace(tzinfo=ET)
-                        if exit_dt >= cutoff_date:
-                            closed_trades.append(row)
-                    except Exception as e:
-                        pass
+                except Exception as e:
+                    pass
     except Exception as e:
         print(f"Error reading trade log: {e}")
         return
@@ -645,15 +771,25 @@ def show_closed_trades(days=None, account_mode="PAPER", account_id=None):
     print(f"  Period: {date_range}")
     print(f"{'='*70}")
 
-    print(f"\n  {'Opened':<14} {'Closed':<14} {'Strikes':<20} {'Entry':>6} {'Exit':>6} {'P/L':>8} {'%':>6} {'Dur':>5} {'Reason':<24}")
-    print(f"  {'-'*14} {'-'*14} {'-'*20} {'-'*6} {'-'*6} {'-'*8} {'-'*6} {'-'*5} {'-'*24}")
+    print(f"\n  {'Opened':<14} {'Closed':<14} {'Type':<8} {'Cts':>3} {'Strikes':<18} {'Entry':>6} {'Exit':>6} {'P/L':>8} {'%':>6} {'Dur':>5} {'Reason':<18}")
+    print(f"  {'-'*14} {'-'*14} {'-'*8} {'-'*3} {'-'*18} {'-'*6} {'-'*6} {'-'*8} {'-'*6} {'-'*5} {'-'*18}")
 
     total_pl = 0
     wins = 0
     losses = 0
 
     for trade in closed_trades:
-        strikes = trade.get('Strikes', 'N/A')[:20]
+        strikes = trade.get('Strikes', 'N/A')[:16]
+        strategy = trade.get('Strategy', 'N/A').upper()[:4]  # PUT, CALL, IC
+        contracts = trade.get('Contracts', '?')  # Number of contracts
+
+        # Determine underlying symbol from strike price
+        try:
+            first_strike = float(strikes.split('/')[0])
+            underlying = 'NDX' if first_strike >= 10000 else 'SPX'
+        except:
+            underlying = '?'
+
         entry = trade.get('Entry_Credit', '0')
         exit_val = trade.get('Exit_Value', '0')
         open_time = trade.get('Timestamp_ET', '')
@@ -742,10 +878,11 @@ def show_closed_trades(days=None, account_mode="PAPER", account_id=None):
             pct_colored = f"{pl_pct:>6}"
 
         # Print with proper alignment (no additional padding for colored fields)
-        print(f"  {time_str:<14} {exit_time_str:<14} {strikes:<20} {entry_str:>6} {exit_str:>6} {pl_colored} {pct_colored} {dur_str:>5} {reason_short:<24}")
+        type_label = f"{underlying} {strategy}"
+        print(f"  {time_str:<14} {exit_time_str:<14} {type_label:<8} {contracts:>3} {strikes:<18} {entry_str:>6} {exit_str:>6} {pl_colored} {pct_colored} {dur_str:>5} {reason_short:<18}")
 
     # Summary
-    print(f"  {'-'*14} {'-'*14} {'-'*20} {'-'*6} {'-'*6} {'-'*8} {'-'*6} {'-'*5} {'-'*24}")
+    print(f"  {'-'*14} {'-'*14} {'-'*8} {'-'*3} {'-'*18} {'-'*6} {'-'*6} {'-'*8} {'-'*6} {'-'*5} {'-'*18}")
 
     total_trades = wins + losses
     win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
@@ -760,7 +897,7 @@ def show_closed_trades(days=None, account_mode="PAPER", account_id=None):
     else:
         total_colored = f"${total_pl:>+6.0f}"
 
-    print(f"  {'TOTAL':<14} {summary:<14} {'':>6} {'':>6} {total_colored}")
+    print(f"  {'TOTAL':<14} {summary:<14} {'':>8} {'':>3} {'':>18} {'':>6} {'':>6} {total_colored}")
 
     # Extended stats for multi-day history
     if days and days != 'today':

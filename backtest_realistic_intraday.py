@@ -137,9 +137,14 @@ class OptionPriceSimulator:
         self.long_strike = strikes[1]
         self.is_put = is_put
         self.entry_credit = entry_credit
+
+        # HIGH-3 FIX (2026-01-13): Validate strikes are different to avoid zero spread width
         # Convert spread width from POINTS to DOLLARS
         # 10-point spread = $1.00 max value (10 points × $0.10 per point)
-        self.spread_width = abs(strikes[0] - strikes[1]) / 100.0
+        strike_diff = abs(strikes[0] - strikes[1])
+        if strike_diff == 0:
+            raise ValueError(f"Invalid strikes: {strikes} - strikes must be different")
+        self.spread_width = strike_diff / 100.0
 
     def estimate_value(self, underlying_price, minutes_to_expiry):
         """Estimate current spread value (cost to close).
@@ -174,7 +179,12 @@ class OptionPriceSimulator:
         # CRITICAL FIX: Time value based on REMAINING width, not entry credit
         # Once spread is maxed out (intrinsic = width), time value = 0
         extrinsic_remaining = max(0, self.spread_width - spread_intrinsic)
-        time_value = extrinsic_remaining * time_value_pct * (self.entry_credit / self.spread_width)
+
+        # HIGH-1 FIX (2026-01-13): Prevent division by zero if spread_width is zero (defensive)
+        if self.spread_width > 0:
+            time_value = extrinsic_remaining * time_value_pct * (self.entry_credit / self.spread_width)
+        else:
+            time_value = 0  # No spread width, no time value
 
         # Total spread value = intrinsic + time
         spread_value = spread_intrinsic + time_value
@@ -190,6 +200,10 @@ def calculate_position_size_kelly(account_balance, win_rate, avg_win, avg_loss):
     """Half-Kelly position sizing."""
     if account_balance < STARTING_CAPITAL * 0.5:
         return 0
+
+    # CRITICAL-1 FIX (2026-01-13): Prevent division by zero if all trades were losses
+    if avg_win == 0:
+        return 1  # No winners yet, use minimum position size
 
     kelly_f = (win_rate * avg_win - (1 - win_rate) * avg_loss) / avg_win
     half_kelly = kelly_f * 0.5
@@ -239,8 +253,12 @@ def simulate_trade(entry_time_hour, spx_price, gex_pin, vix, credit, contracts, 
         # Get current spread value
         spread_value = option_sim.estimate_value(current_price, minutes_to_expiry)
 
-        # Calculate P/L (credit received - current value)
-        profit_pct = (credit - spread_value) / credit
+        # CRITICAL-2 FIX (2026-01-13): Prevent division by zero if credit is zero
+        if credit == 0:
+            profit_pct = 0.0  # No credit received, no profit
+        else:
+            # Calculate P/L (credit received - current value)
+            profit_pct = (credit - spread_value) / credit
 
         # Track peak for trailing stop
         if profit_pct > best_profit_pct:
@@ -456,7 +474,10 @@ def run_backtest():
     avg_credit = sum(t['credit'] for t in all_trades) / len(all_trades) if all_trades else 0
     avg_contracts = sum(t['contracts'] for t in all_trades) / len(all_trades) if all_trades else 0
 
-    profit_factor = abs(sum(t['total_profit'] for t in winners) / sum(t['total_profit'] for t in losers)) if losers else 0
+    # CRITICAL-3 FIX (2026-01-13): Prevent division by zero in profit factor
+    total_losses = sum(t['total_profit'] for t in losers) if losers else 0
+    total_wins = sum(t['total_profit'] for t in winners) if winners else 0
+    profit_factor = abs(total_wins / total_losses) if total_losses != 0 else (999 if total_wins > 0 else 0)
 
     # Hold-to-expiry stats
     held_trades = [t for t in all_trades if t['hold_to_expiry']]
@@ -492,7 +513,14 @@ def run_backtest():
     print(f"Trades Held:          {len(held_trades)} ({len(held_trades)/len(all_trades)*100:.1f}%)")
     if held_trades:
         held_pnl = sum(t['total_profit'] for t in held_trades)
-        print(f"P/L from Holds:       ${held_pnl:,.0f} ({held_pnl/total_pnl*100:.1f}% of total)")
+
+        # HIGH-2 FIX (2026-01-13): Prevent division by zero if total_pnl is zero
+        if total_pnl != 0:
+            held_pct = held_pnl / total_pnl * 100
+            print(f"P/L from Holds:       ${held_pnl:,.0f} ({held_pct:.1f}% of total)")
+        else:
+            print(f"P/L from Holds:       ${held_pnl:,.0f} (N/A% - total P/L is zero)")
+
         avg_hold_profit = sum(t['profit_per_contract'] for t in held_trades) / len(held_trades)
         print(f"Avg Hold Profit:      ${avg_hold_profit:.0f} per contract")
     print()

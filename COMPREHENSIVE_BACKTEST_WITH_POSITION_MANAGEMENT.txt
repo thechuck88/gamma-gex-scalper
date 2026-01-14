@@ -1,0 +1,88 @@
+====================================================================================================
+COMPREHENSIVE BACKTEST: GEX Scalper with Full Position Management + 2026-01-14 Optimizations
+====================================================================================================
+
+Analysis Date: 2026-01-14T08:03:51.942346
+Data: NDX daily prices (2025-12-09 to 2025-12-18)
+
+Position Management Features Included:
+  ✅ Stop Loss: -10% (STOP_LOSS_PCT = 0.10)
+  ✅ Profit Targets: 50% HIGH / 70% MEDIUM (tiered)
+  ✅ Progressive Profit Targets: 50% → 80% over 4 hours
+  ✅ Hold-to-Expiration: 80% qualification threshold
+     - 85% expire worthless (collect 100%)
+     - 12% expire near ATM (75-95%)
+     - 3% expire ITM (loss)
+  ✅ Trailing Stops: Activate at 20%, lock 12%, trail 8%
+  ✅ VIX Filters: Configurable (12.0 → 13.0)
+  ✅ Entry Time Filtering: Remove afternoon trades
+  ✅ RSI Enforcement: Optional (bypass → always enforce)
+
+----------------------------------------------------------------------------------------------------
+BASELINE (Original)
+----------------------------------------------------------------------------------------------------
+Parameters: ENTRY_TIMES=up to 12:30 PM, VIX_FLOOR=12.0, RSI bypass
+
+Entry Attempts:                 35
+Filtered (VIX):                  9
+Filtered (RSI):                  0
+Actual Trades:                  26
+Total P&L:              $           0.42
+Win Rate:                          37.1%
+Wins/Losses/BE:                 13/13        /0         
+Avg P/L/Trade:          $           0.01
+Max Loss:               $          -0.05
+Volatility (σ):         $           0.07
+Sharpe Proxy:                      6.30
+
+----------------------------------------------------------------------------------------------------
+OPT1 (Cutoff Hour)
+----------------------------------------------------------------------------------------------------
+Parameters: ENTRY_TIMES=up to 12:00 PM (1 PM close), VIX_FLOOR=12.0
+
+Entry Attempts:                 30
+Filtered (VIX):                  4
+Filtered (RSI):                  0
+Actual Trades:                  26
+Total P&L:              $           0.19
+Win Rate:                          43.3%
+Wins/Losses/BE:                 13/13        /0         
+Avg P/L/Trade:          $           0.01
+Max Loss:               $          -0.05
+Volatility (σ):         $           0.05
+Sharpe Proxy:                      3.83
+
+----------------------------------------------------------------------------------------------------
+OPT2 (Cutoff + VIX)
+----------------------------------------------------------------------------------------------------
+Parameters: ENTRY_TIMES=up to 12:00 PM, VIX_FLOOR=13.0
+
+Entry Attempts:                 30
+Filtered (VIX):                 17
+Filtered (RSI):                  0
+Actual Trades:                  13
+Total P&L:              $           0.50
+Win Rate:                          30.0%
+Wins/Losses/BE:                  9/4         /0         
+Avg P/L/Trade:          $           0.02
+Max Loss:               $          -0.05
+Volatility (σ):         $           0.06
+Sharpe Proxy:                      8.03
+
+----------------------------------------------------------------------------------------------------
+OPT3 (All Fixes)
+----------------------------------------------------------------------------------------------------
+Parameters: ENTRY_TIMES=up to 12:00 PM, VIX_FLOOR=13.0, RSI enforced
+
+Entry Attempts:                 30
+Filtered (VIX):                 14
+Filtered (RSI):                  3
+Actual Trades:                  13
+Total P&L:              $           0.54
+Win Rate:                          23.3%
+Wins/Losses/BE:                  7/6         /0         
+Avg P/L/Trade:          $           0.02
+Max Loss:               $          -0.05
+Volatility (σ):         $           0.10
+Sharpe Proxy:                      5.25
+

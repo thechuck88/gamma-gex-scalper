@@ -20,10 +20,10 @@ from datetime import datetime, date, time as dt_time, timedelta
 from collections import defaultdict
 import pytz
 
-sys.path.insert(0, '/gamma-scalper')
+sys.path.insert(0, '/root/gamma')
 from gex_blackbox_recorder import get_optimized_connection
 
-DB_PATH = "/gamma-scalper/data/gex_blackbox.db"
+DB_PATH = "/root/gamma/data/gex_blackbox.db"
 ET = pytz.timezone('America/New_York')
 
 # Entry check times (same as bot)

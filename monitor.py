@@ -37,6 +37,9 @@ import tempfile  # BUGFIX (2026-01-10): For atomic file writes
 # Import index configuration for multi-index support
 from index_config import get_index_config
 
+# Configurable base directory (can be overridden via GAMMA_HOME env var)
+GAMMA_HOME = os.environ.get('GAMMA_HOME', '/root/gamma')
+
 from config import (
     PAPER_ACCOUNT_ID,
     LIVE_ACCOUNT_ID,
@@ -64,11 +67,11 @@ from discord_autodelete import DiscordAutoDelete
 ET = pytz.timezone('America/New_York')
 
 # File paths
-ORDERS_FILE_PAPER = "/gamma-scalper/data/orders_paper.json"
-ORDERS_FILE_LIVE = "/gamma-scalper/data/orders_live.json"
-TRADE_LOG_FILE = "/gamma-scalper/data/trades.csv"
-LOG_FILE_PAPER = "/gamma-scalper/data/monitor_paper.log"
-LOG_FILE_LIVE = "/gamma-scalper/data/monitor_live.log"
+ORDERS_FILE_PAPER = f"{GAMMA_HOME}/data/orders_paper.json"
+ORDERS_FILE_LIVE = f"{GAMMA_HOME}/data/orders_live.json"
+TRADE_LOG_FILE = f"{GAMMA_HOME}/data/trades.csv"
+LOG_FILE_PAPER = f"{GAMMA_HOME}/data/monitor_paper.log"
+LOG_FILE_LIVE = f"{GAMMA_HOME}/data/monitor_live.log"
 
 # Monitor settings
 POLL_INTERVAL = 15              # Seconds between checks (tighter stop loss monitoring)
@@ -133,11 +136,11 @@ discord_autodelete = None
 
 # Use separate storage files and webhooks for LIVE and PAPER to avoid race conditions
 if MODE == 'REAL':
-    DISCORD_STORAGE_FILE = "/gamma-scalper/data/discord_messages_live.json"
+    DISCORD_STORAGE_FILE = f"{GAMMA_HOME}/data/discord_messages_live.json"
     DISCORD_WEBHOOK_URL = DISCORD_WEBHOOK_LIVE_URL
     HEALTHCHECK_URL = HEALTHCHECK_LIVE_URL
 else:
-    DISCORD_STORAGE_FILE = "/gamma-scalper/data/discord_messages_paper.json"
+    DISCORD_STORAGE_FILE = f"{GAMMA_HOME}/data/discord_messages_paper.json"
     DISCORD_WEBHOOK_URL = DISCORD_WEBHOOK_PAPER_URL
     HEALTHCHECK_URL = HEALTHCHECK_PAPER_URL
 
@@ -787,7 +790,7 @@ def update_trade_log(order_id, exit_value, exit_reason, entry_credit, entry_time
 
                 # Update account balance (autoscaling)
                 try:
-                    balance_file = "/gamma-scalper/data/account_balance.json"
+                    balance_file = f"{GAMMA_HOME}/data/account_balance.json"
                     if os.path.exists(balance_file):
                         with open(balance_file, 'r') as f:
                             balance_data = json.load(f)

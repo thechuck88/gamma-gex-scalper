@@ -10,7 +10,7 @@ import numpy as np
 from datetime import datetime
 from collections import defaultdict
 
-DB_PATH = "/gamma-scalper/data/gex_blackbox.db"
+DB_PATH = "/root/gamma/data/gex_blackbox.db"
 
 def get_optimized_connection():
     conn = sqlite3.connect(DB_PATH)
@@ -111,7 +111,7 @@ def generate_trades_report():
     report.append("")
     
     # Summary header
-    report.append("Database: /gamma-scalper/data/gex_blackbox.db")
+    report.append("Database: /root/gamma/data/gex_blackbox.db")
     report.append("Total Snapshots: 144 (30-second intervals)")
     report.append("Period: 2026-01-12 09:35:10 UTC to 2026-01-13 20:01:24 UTC")
     report.append("Converted to ET: 2026-01-12 09:35:10 ET to 2026-01-13 15:01:24 ET")

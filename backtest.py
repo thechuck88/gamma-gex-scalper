@@ -198,6 +198,10 @@ def calculate_position_size_kelly(account_balance, win_rate, avg_win, avg_loss):
     if account_balance < STARTING_CAPITAL * 0.5:
         return 0  # Stop trading if account drops below 50% of starting capital
 
+    # CRITICAL-1 FIX (2026-01-13): Prevent division by zero if all trades were losses
+    if avg_win == 0:
+        return 1  # No winners yet, use minimum position size
+
     # Kelly fraction
     kelly_f = (win_rate * avg_win - (1 - win_rate) * avg_loss) / avg_win
 
@@ -527,6 +531,13 @@ def simulate_trade_outcome(setup, entry_credit, spx_open, spx_high, spx_low, spx
 def run_backtest(days=180, realistic=False, auto_scale=False):
     """Run the GEX scalper backtest."""
 
+    # HIGH-4 FIX (2026-01-13): Validate days parameter
+    if not isinstance(days, (int, float)) or days <= 0:
+        print(f"ERROR: Invalid days parameter: {days} (must be positive number)")
+        return None
+    if days > 5000:
+        print(f"WARNING: Very large lookback ({days} days), this may be slow or fail")
+
     print("=" * 70)
     print("GEX SCALPER BACKTEST")
     print(f"Period: Last {days} trading days")
@@ -541,12 +552,24 @@ def run_backtest(days=180, realistic=False, auto_scale=False):
     end_date = datetime.datetime.now()
     start_date = end_date - datetime.timedelta(days=int(days * 1.5))  # Extra buffer for weekends
 
-    spy = yf.download("SPY", start=start_date, end=end_date, progress=False)
-    vix = yf.download("^VIX", start=start_date, end=end_date, progress=False)
+    # HIGH-5 FIX (2026-01-13): Add exception handling for data fetch
+    try:
+        spy = yf.download("SPY", start=start_date, end=end_date, progress=False)
+        vix = yf.download("^VIX", start=start_date, end=end_date, progress=False)
+    except Exception as e:
+        print(f"ERROR: Failed to fetch historical data from yfinance: {e}")
+        return None
 
-    if spy.empty or vix.empty:
-        print("ERROR: Could not fetch historical data")
-        return
+    # HIGH-5 FIX (2026-01-13): Validate dataframes are not empty
+    if spy is None or spy.empty:
+        print("ERROR: SPY data is empty or None")
+        return None
+    if vix is None or vix.empty:
+        print("ERROR: VIX data is empty or None")
+        return None
+    if len(spy) < 30:
+        print(f"ERROR: Insufficient SPY data (only {len(spy)} days, need at least 30)")
+        return None
 
     # Handle multi-level columns from yfinance
     if isinstance(spy.columns, pd.MultiIndex):
@@ -566,7 +589,10 @@ def run_backtest(days=180, realistic=False, auto_scale=False):
     # Calculate IVR (52-week rank)
     spy['VIX_52w_high'] = spy['VIX'].rolling(window=252, min_periods=50).max()
     spy['VIX_52w_low'] = spy['VIX'].rolling(window=252, min_periods=50).min()
-    spy['IVR'] = ((spy['VIX'] - spy['VIX_52w_low']) / (spy['VIX_52w_high'] - spy['VIX_52w_low'])) * 100
+
+    # CRITICAL-2 FIX (2026-01-13): Prevent division by zero if VIX range is flat
+    vix_range = spy['VIX_52w_high'] - spy['VIX_52w_low']
+    spy['IVR'] = ((spy['VIX'] - spy['VIX_52w_low']) / vix_range.where(vix_range > 0, 1.0)) * 100
     spy['IVR'] = spy['IVR'].fillna(50)  # Default to 50 if not enough history
 
     # Day of week (0=Mon, 4=Fri)
@@ -575,7 +601,9 @@ def run_backtest(days=180, realistic=False, auto_scale=False):
 
     # Gap size (open vs previous close)
     spy['prev_close'] = spy['SPX_Close'].shift(1)
-    spy['gap_pct'] = ((spy['SPX_Open'] - spy['prev_close']) / spy['prev_close'] * 100).abs()
+
+    # HIGH-1 FIX (2026-01-13): Prevent division by zero if prev_close is zero or NaN
+    spy['gap_pct'] = ((spy['SPX_Open'] - spy['prev_close']) / spy['prev_close'].where(spy['prev_close'] > 0, 1.0) * 100).abs()
 
     # 20-day SMA trend
     spy['sma20'] = spy['SPX_Close'].rolling(window=20).mean()
@@ -584,7 +612,9 @@ def run_backtest(days=180, realistic=False, auto_scale=False):
     # Previous day range (ATR proxy)
     spy['prev_range'] = (spy['SPX_High'].shift(1) - spy['SPX_Low'].shift(1))
     spy['avg_range'] = spy['prev_range'].rolling(window=10).mean()
-    spy['range_ratio'] = spy['prev_range'] / spy['avg_range']  # >1 = high range day
+
+    # CRITICAL-3 FIX (2026-01-13): Prevent division by zero if avg_range is zero
+    spy['range_ratio'] = spy['prev_range'] / spy['avg_range'].where(spy['avg_range'] > 0, 1.0)  # >1 = high range day
 
     # Consecutive up/down days
     spy['daily_return'] = spy['SPX_Close'].pct_change()
@@ -628,7 +658,9 @@ def run_backtest(days=180, realistic=False, auto_scale=False):
         loss = (-delta).where(delta < 0, 0)
         avg_gain = gain.rolling(window=period, min_periods=period).mean()
         avg_loss = loss.rolling(window=period, min_periods=period).mean()
-        rs = avg_gain / avg_loss
+
+        # CRITICAL-4 FIX (2026-01-13): Prevent division by zero in RS calculation
+        rs = avg_gain / avg_loss.where(avg_loss > 0, 0.01)  # Avoid div-by-zero
         rsi = 100 - (100 / (1 + rs))
         return rsi
 
@@ -666,8 +698,9 @@ def run_backtest(days=180, realistic=False, auto_scale=False):
         print(f"\n📊 FIXED POSITION SIZE: 1 contract per trade")
 
     trades = []
-    skipped_days = {'fomc': 0, 'short': 0, 'vix': 0}
+    skipped_days = {'fomc': 0, 'short': 0, 'vix': 0, 'market_open': 0, 'vix_spike': 0}
     prev_close = None
+    prev_vix = None  # Track previous day's VIX for spike detection
 
     # Rolling statistics for Kelly calculation (start with baseline estimates)
     rolling_wins = []
@@ -719,6 +752,7 @@ def run_backtest(days=180, realistic=False, auto_scale=False):
             pin_price = round_to_25(prev_close)  # Previous day's close - applies to all entry times
 
         prev_close = spx_close
+        prev_vix = vix_val  # Update previous VIX for spike detection
 
         # Try each entry time
         for entry_idx, hours_after_open in enumerate(ENTRY_TIMES):
@@ -742,6 +776,21 @@ def run_backtest(days=180, realistic=False, auto_scale=False):
             # NOTE: This is still not perfect (we'd need 1-min intraday bars for accuracy),
             #       but it's better than creating fake prices that never existed
             spx_at_entry = spx_close  # Conservative: use day's close for all entry times
+
+            # === FILTER #1: MARKET OPEN BLACKOUT (2026-01-13) ===
+            # Skip first 30 minutes (9:30-10:00 AM) due to opening volatility
+            # hours_after_open < 0.5 means before 10:00 AM
+            if hours_after_open < 0.5:
+                skipped_days['market_open'] += 1
+                continue  # Skip this entry time
+
+            # === FILTER #2: VIX SPIKE DETECTION (2026-01-13) ===
+            # Skip if VIX spiked >5% from previous day (sudden volatility surge)
+            if prev_vix is not None:
+                vix_change_pct = (vix_val - prev_vix) / prev_vix
+                if vix_change_pct > 0.05:  # 5% spike threshold
+                    skipped_days['vix_spike'] += 1
+                    continue  # Skip this trade
 
             # Get trade setup
             setup = get_gex_trade_setup(pin_price, spx_at_entry, vix_val)
@@ -867,7 +916,8 @@ def run_backtest(days=180, realistic=False, auto_scale=False):
     # Create results DataFrame
     df = pd.DataFrame(trades)
 
-    print(f"\nDays skipped: FOMC={skipped_days['fomc']}, Short={skipped_days['short']}, VIX>={VIX_MAX_THRESHOLD}: {skipped_days['vix']} entry attempts")
+    print(f"\nDays skipped: FOMC={skipped_days['fomc']}, Short={skipped_days['short']}, VIX>={VIX_MAX_THRESHOLD}: {skipped_days['vix']} entries")
+    print(f"Filters applied: Market open (9:30-10AM): {skipped_days['market_open']} entries, VIX spike (>5%): {skipped_days['vix_spike']} entries")
 
     if df.empty:
         print("No trades generated!")
@@ -1202,7 +1252,9 @@ def run_backtest(days=180, realistic=False, auto_scale=False):
         'pnl_dollars': ['count', 'sum', lambda x: (x > 0).sum()]
     })
     monthly.columns = ['trades', 'pnl', 'wins']
-    monthly['wr'] = monthly['wins'] / monthly['trades'] * 100
+
+    # HIGH-2 FIX (2026-01-13): Prevent division by zero if a month has no trades
+    monthly['wr'] = (monthly['wins'] / monthly['trades'].where(monthly['trades'] > 0, 1)) * 100
 
     for month, row in monthly.iterrows():
         print(f"{month}  Trades: {int(row['trades']):3d}  WR: {row['wr']:5.1f}%  P/L: ${row['pnl']:+8,.2f}")
@@ -1281,7 +1333,10 @@ def run_monte_carlo(df, simulations=1000, periods=252, auto_scale=False):
 
     # Get trade P/L distribution (per-contract)
     trade_pnls = df['pnl_per_contract'].values if 'pnl_per_contract' in df.columns else df['pnl_dollars'].values
-    trades_per_day = len(df) / df['date'].nunique()
+
+    # HIGH-3 FIX (2026-01-13): Prevent division by zero if all trades on same date
+    unique_days = df['date'].nunique()
+    trades_per_day = len(df) / unique_days if unique_days > 0 else 1.0
 
     print(f"\nInput: {len(trade_pnls)} historical trades")
     print(f"Avg trades/day: {trades_per_day:.1f}")

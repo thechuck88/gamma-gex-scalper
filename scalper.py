@@ -7,17 +7,21 @@ print(f"[STARTUP] Scalper invoked at {__import__('datetime').datetime.now()}", f
 
 import warnings
 import logging
+import os
+
+# Configurable base directory (can be overridden via GAMMA_HOME env var)
+GAMMA_HOME = os.environ.get('GAMMA_HOME', '/root/gamma')
 
 # Security Fix (2026-01-04): Log yfinance warnings instead of ignoring
 # This helps catch API breaking changes before they cause failures
 logging.captureWarnings(True)
 yfinance_logger = logging.getLogger('py.warnings')
-yfinance_handler = logging.FileHandler('/gamma-scalper/data/yfinance_warnings.log')
+yfinance_handler = logging.FileHandler(f'{GAMMA_HOME}/data/yfinance_warnings.log')
 yfinance_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 yfinance_logger.addHandler(yfinance_handler)
 yfinance_logger.setLevel(logging.WARNING)
 
-import datetime, os, requests, json, csv, pytz, time, sys, math, fcntl, tempfile
+import datetime, requests, json, csv, pytz, time, math, fcntl, tempfile
 import yfinance as yf
 import pandas as pd
 from datetime import date
@@ -256,7 +260,7 @@ HEADERS = {"Accept": "application/json", "Authorization": f"Bearer {TRADIER_KEY}
 # Set Discord webhook URL based on mode
 DISCORD_WEBHOOK_URL = DISCORD_WEBHOOK_LIVE_URL if mode == "REAL" else DISCORD_WEBHOOK_PAPER_URL
 
-TRADE_LOG_FILE = "/gamma-scalper/data/trades.csv"
+TRADE_LOG_FILE = f"{GAMMA_HOME}/data/trades.csv"
 
 # BUGFIX (2026-01-12): Make lock file unique per index/mode combination
 # Previously all 4 cron jobs (SPX PAPER, SPX LIVE, NDX PAPER, NDX LIVE) fought over same lock
@@ -800,7 +804,7 @@ AUTOSCALING_ENABLED = True          # Enable Half-Kelly position sizing
 STARTING_CAPITAL = 20000             # Starting account balance ($20k for conservative start)
 MAX_CONTRACTS_PER_TRADE = 1          # RAMP-UP: Start with 1 contract (2026-01-12), increase after 1 month of live trading
 STOP_LOSS_PER_CONTRACT = 150         # Max loss per contract (from backtest data)
-ACCOUNT_BALANCE_FILE = "/gamma-scalper/data/account_balance.json"  # Track balance across restarts
+ACCOUNT_BALANCE_FILE = f"{GAMMA_HOME}/data/account_balance.json"  # Track balance across restarts
 
 # Bootstrap statistics (from realistic backtest until we have real data)
 BOOTSTRAP_WIN_RATE = 0.582           # 58.2% win rate (realistic mode)
@@ -1532,7 +1536,7 @@ try:
 
     # === CRITICAL FIX-1: CHECK POSITION LIMIT *BEFORE* PLACING ORDER ===
     # This prevents orphaned positions (order live but not tracked)
-    ORDERS_FILE = "/gamma-scalper/data/orders_paper.json" if mode == "PAPER" else "/gamma-scalper/data/orders_live.json"
+    ORDERS_FILE = f"{GAMMA_HOME}/data/orders_paper.json" if mode == "PAPER" else f"{GAMMA_HOME}/data/orders_live.json"
 
     # Load existing orders to check position limit
     existing_orders = []

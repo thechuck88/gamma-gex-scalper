@@ -8,7 +8,7 @@ Verifies that both production scalper and backtests correctly implement:
 3. Credit = Sell_Price - Buy_Price (positive, you receive money)
 """
 import sys
-sys.path.insert(0, '/gamma-scalper')
+sys.path.insert(0, '/root/gamma')
 
 from core.gex_strategy import get_gex_trade_setup
 from index_config import get_index_config

@@ -20,7 +20,7 @@ import sys
 import csv
 from datetime import datetime
 
-sys.path.insert(0, '/gamma-scalper')
+sys.path.insert(0, '/root/gamma')
 from backtest_report import run_backtest_silent
 from gex_blackbox_recorder import get_optimized_connection
 
@@ -202,12 +202,12 @@ def main():
         if len(sys.argv) > 2:
             output_file = sys.argv[2]
         else:
-            output_file = f"/gamma-scalper/data/trades_{test_date.strftime('%Y%m%d')}.csv"
+            output_file = f"/root/gamma/data/trades_{test_date.strftime('%Y%m%d')}.csv"
 
         export_trades_to_csv(test_date, output_file)
     else:
         # No arguments: Export all available dates to one file
-        output_file = "/gamma-scalper/data/trades_all.csv"
+        output_file = "/root/gamma/data/trades_all.csv"
         export_all_dates_to_csv(output_file)
 
 

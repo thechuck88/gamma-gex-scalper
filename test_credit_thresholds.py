@@ -4,7 +4,7 @@ Test credit threshold logic with new realistic 0DTE minimums.
 Simulates various credit scenarios to verify acceptance/rejection.
 """
 import sys
-sys.path.insert(0, '/gamma-scalper')
+sys.path.insert(0, '/root/gamma')
 
 from index_config import get_index_config
 import datetime

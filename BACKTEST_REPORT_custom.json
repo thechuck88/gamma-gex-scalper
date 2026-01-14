@@ -1,0 +1,33 @@
+{
+  "period": "2026-01-10 to 2026-01-20",
+  "symbol": "SPX",
+  "start_date": "2026-01-10T00:00:00",
+  "end_date": "2026-01-21T16:30:00",
+  "parameters": {
+    "starting_balance": 100000.0,
+    "vix_floor": 12.0,
+    "vix_ceiling": 30.0,
+    "min_credit": 2.0,
+    "stop_loss_percent": 0.1,
+    "profit_target_percent": 0.6,
+    "trailing_stop_enabled": true
+  },
+  "results": {
+    "total_trades": 16,
+    "winning_trades": 16,
+    "losing_trades": 0,
+    "break_even_trades": 0,
+    "win_rate": 1.0,
+    "total_pnl": 3320.6500000000005,
+    "avg_win": 207.54062500000003,
+    "max_win": 444.1000000000001,
+    "avg_loss": 0.0,
+    "max_loss": 0.0,
+    "profit_factor": 0.0,
+    "current_balance": 103320.65000000001,
+    "peak_balance": 103320.65000000001,
+    "max_drawdown": 0.0,
+    "return_percent": 3.320650000000009
+  },
+  "execution_seconds": 2.6945295333862305
+}

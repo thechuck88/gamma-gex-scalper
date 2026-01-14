@@ -1,0 +1,26 @@
+{
+  "timestamp": "2026-01-14T07:30:34.226327",
+  "period": "past_12_months",
+  "trades_analyzed": 73,
+  "normal_ic": {
+    "total_pnl": -493.0,
+    "trades": 73,
+    "win_rate": 12.32876712328767,
+    "max_loss": -120.0,
+    "sharpe_proxy": -12.237432113326143
+  },
+  "bwic": {
+    "total_pnl": -490.78999999999996,
+    "trades": 73,
+    "win_rate": 12.32876712328767,
+    "max_loss": -116.39999999999999,
+    "sharpe_proxy": -11.965605119639797
+  },
+  "comparison": {
+    "pnl_difference": 2.2100000000000364,
+    "pnl_pct_change": 0.44827586206897285,
+    "wr_difference": 0.0,
+    "max_loss_improvement_pct": 3.000000000000007,
+    "sharpe_improvement_pct": 2.221274783541689
+  }
+}

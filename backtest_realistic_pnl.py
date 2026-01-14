@@ -12,8 +12,12 @@ import sqlite3
 import pandas as pd
 from datetime import datetime
 from collections import defaultdict
+import sys
+sys.path.insert(0, '/root/gamma')
+from core.gex_strategy import get_gex_trade_setup
+from core.broken_wing_ic_calculator import BrokenWingICCalculator
 
-DB_PATH = "/gamma-scalper/data/gex_blackbox.db"
+DB_PATH = "/root/gamma/data/gex_blackbox.db"
 
 def get_optimized_connection():
     """Get database connection with optimizations."""
@@ -93,6 +97,64 @@ def get_entry_credit(conn, timestamp, index_symbol, short_strike, long_strike, o
     return short_bid - long_ask
 
 
+def get_ic_entry_credit(conn, timestamp, index_symbol, call_short, call_long, put_short, put_long):
+    """
+    Get REAL entry credit for a full Iron Condor (both legs).
+
+    Total IC Credit = (Call side) + (Put side)
+    = (short_call_bid - long_call_ask) + (short_put_bid - long_put_ask)
+    """
+    cursor = conn.cursor()
+
+    # Find closest future timestamp with price data
+    cursor.execute("""
+    SELECT DISTINCT timestamp FROM options_prices_live
+    WHERE timestamp >= ? AND index_symbol = ?
+    ORDER BY timestamp ASC LIMIT 1
+    """, (timestamp, index_symbol))
+
+    closest_ts_row = cursor.fetchone()
+    if not closest_ts_row:
+        return None
+
+    closest_ts = closest_ts_row[0]
+
+    # Get all 4 legs
+    cursor.execute("""
+    SELECT bid FROM options_prices_live
+    WHERE timestamp = ? AND index_symbol = ? AND strike = ? AND option_type = 'call'
+    """, (closest_ts, index_symbol, call_short))
+    call_short_bid = cursor.fetchone()
+    call_short_bid = call_short_bid[0] if call_short_bid else None
+
+    cursor.execute("""
+    SELECT ask FROM options_prices_live
+    WHERE timestamp = ? AND index_symbol = ? AND strike = ? AND option_type = 'call'
+    """, (closest_ts, index_symbol, call_long))
+    call_long_ask = cursor.fetchone()
+    call_long_ask = call_long_ask[0] if call_long_ask else None
+
+    cursor.execute("""
+    SELECT bid FROM options_prices_live
+    WHERE timestamp = ? AND index_symbol = ? AND strike = ? AND option_type = 'put'
+    """, (closest_ts, index_symbol, put_short))
+    put_short_bid = cursor.fetchone()
+    put_short_bid = put_short_bid[0] if put_short_bid else None
+
+    cursor.execute("""
+    SELECT ask FROM options_prices_live
+    WHERE timestamp = ? AND index_symbol = ? AND strike = ? AND option_type = 'put'
+    """, (closest_ts, index_symbol, put_long))
+    put_long_ask = cursor.fetchone()
+    put_long_ask = put_long_ask[0] if put_long_ask else None
+
+    if any(x is None for x in [call_short_bid, call_long_ask, put_short_bid, put_long_ask]):
+        return None
+
+    # Total credit from both sides
+    return (call_short_bid - call_long_ask) + (put_short_bid - put_long_ask)
+
+
 def get_spread_value_at_time(conn, timestamp, index_symbol, short_strike, long_strike, option_type):
     """
     Get current spread value at a specific timestamp.
@@ -140,6 +202,98 @@ def get_future_timestamps(conn, entry_timestamp, index_symbol, max_bars=100):
     """, (entry_timestamp, index_symbol, max_bars))
 
     return [row[0] for row in cursor.fetchall()]
+
+
+def calculate_gex_polarity(conn, timestamp, index_symbol):
+    """
+    Calculate GEX polarity for competing peaks (for BWIC logic).
+    Returns: (gpi, gex_magnitude) tuple
+
+    GPI (GEX Polarity Index) ranges from -1 (bearish) to +1 (bullish)
+    """
+    cursor = conn.cursor()
+
+    # Get competing peaks info
+    cursor.execute("""
+    SELECT peak1_strike, peak2_strike, peak1_gex, peak2_gex, is_competing
+    FROM competing_peaks
+    WHERE timestamp = ? AND index_symbol = ?
+    """, (timestamp, index_symbol))
+
+    row = cursor.fetchone()
+    if not row:
+        return 0.0, 0  # No competing peaks, neutral
+
+    peak1_strike, peak2_strike, peak1_gex, peak2_gex, is_competing = row
+
+    # Only use polarity if actually competing
+    if not is_competing:
+        return 0.0, 0
+
+    if peak1_strike is None or peak2_strike is None:
+        return 0.0, 0
+
+    if peak1_gex is None or peak2_gex is None:
+        return 0.0, 0
+
+    # Calculate polarity: positive if peak1 > peak2, negative if peak2 > peak1
+    total_gex = abs(peak1_gex) + abs(peak2_gex)
+    if total_gex == 0:
+        return 0.0, 0
+
+    gpi = (peak1_gex - peak2_gex) / total_gex  # Ranges from -1 to +1
+    gex_magnitude = total_gex
+
+    return gpi, gex_magnitude
+
+
+def apply_bwic_to_ic(setup, timestamp, index_symbol, vix, conn):
+    """
+    Apply Broken Wing Iron Condor (BWIC) logic to IC setups.
+
+    Returns: Modified setup dict with BWIC strikes if applicable
+    """
+    # Only apply BWIC to Iron Condor setups
+    if setup.strategy != 'IC':
+        return setup
+
+    # Get GEX polarity from competing peaks
+    gpi, gex_magnitude = calculate_gex_polarity(conn, timestamp, index_symbol)
+
+    # Decide if we should use BWIC
+    should_use, reason = BrokenWingICCalculator.should_use_bwic(
+        gex_magnitude=int(gex_magnitude) if gex_magnitude else 0,
+        gpi=gpi,
+        has_competing_peaks=(gpi != 0.0),
+        vix=vix
+    )
+
+    if not should_use:
+        return setup  # Use symmetric wings (default from get_gex_trade_setup)
+
+    # Calculate BWIC wing widths
+    widths = BrokenWingICCalculator.get_bwic_wing_widths(
+        gpi=gpi,
+        vix=vix,
+        gex_magnitude=int(gex_magnitude) if gex_magnitude else 0,
+        use_bwic=True
+    )
+
+    # Extract current strikes [call_short, call_long, put_short, put_long]
+    call_short, call_long, put_short, put_long = setup.strikes
+
+    # Apply BWIC wing widths
+    call_long_new = call_short + widths.call_width
+    put_long_new = put_short - widths.put_width
+
+    # Update setup with BWIC strikes
+    setup.strikes = [call_short, call_long_new, put_short, put_long_new]
+    setup.description = (
+        f"IC-BWIC: {call_short}/{call_long_new}C ({widths.call_width}pt) + "
+        f"{put_short}/{put_long_new}P ({widths.put_width}pt) [GPI={gpi:.2f}]"
+    )
+
+    return setup
 
 
 def simulate_trade(conn, entry_time, entry_credit, index_symbol, short_strike, long_strike, option_type,
@@ -257,31 +411,70 @@ def run_backtest():
         if vix is None or vix < 12.0 or vix >= 20.0:
             continue
 
-        # Determine spread type based on SPX position relative to PIN
-        spread_type = determine_spread_type(underlying, pin_strike)
+        # Filter: Only trade best peak ranks (1 and 2, not all 3)
+        # This reduces over-trading - live bot doesn't trade every rank
+        if peak_rank is not None and peak_rank > 2:
+            continue
 
-        # Determine strikes based on spread type
-        if spread_type == 'call':
-            # CALL spread: short at PIN, long 5 pts higher
-            short_strike = pin_strike
-            long_strike = pin_strike + 5.0
-        else:  # 'put'
-            # PUT spread: short at PIN, long 5 pts lower
-            short_strike = pin_strike
-            long_strike = pin_strike - 5.0
+        # Use distance-based logic from get_gex_trade_setup (SINGLE SOURCE OF TRUTH)
+        # This replaces the hardcoded PIN±5 logic that was causing 63% too-high entry credits
+        setup = get_gex_trade_setup(pin_strike, underlying, vix, vix_threshold=20.0)
 
-        # Calculate entry credit using REAL prices
-        entry_credit = get_entry_credit(conn, timestamp, index_symbol, short_strike, long_strike, spread_type)
+        # Skip if VIX too high or too far from PIN
+        if setup.strategy == 'SKIP':
+            continue
 
-        if entry_credit is None or entry_credit < 0.25:
+        # Apply BWIC (Broken Wing Iron Condor) logic if applicable
+        # This uses GEX polarity from competing peaks to adjust wing widths asymmetrically
+        if setup.strategy == 'IC':
+            setup = apply_bwic_to_ic(setup, timestamp, index_symbol, vix, conn)
+
+        # Extract strikes and spread type from setup
+        if setup.strategy == 'IC':
+            # Iron Condor: Calculate full IC credit (both call and put sides)
+            # strikes = [call_short, call_long, put_short, put_long]
+            call_short, call_long, put_short, put_long = setup.strikes
+            short_strike = call_short
+            long_strike = call_long
+            spread_type = 'call'
+            is_ic = True
+            # For IC, get full credit from both legs
+            entry_credit = get_ic_entry_credit(conn, timestamp, index_symbol,
+                                               call_short, call_long, put_short, put_long)
+        elif setup.strategy == 'CALL':
+            short_strike = setup.strikes[0]
+            long_strike = setup.strikes[1]
+            spread_type = 'call'
+            is_ic = False
+            # For directional spreads, get single-leg credit
+            entry_credit = get_entry_credit(conn, timestamp, index_symbol, short_strike, long_strike, spread_type)
+        elif setup.strategy == 'PUT':
+            short_strike = setup.strikes[0]
+            long_strike = setup.strikes[1]
+            spread_type = 'put'
+            is_ic = False
+            # For directional spreads, get single-leg credit
+            entry_credit = get_entry_credit(conn, timestamp, index_symbol, short_strike, long_strike, spread_type)
+        else:
+            continue
+
+        if entry_credit is None:
+            continue
+
+        # Filter: Minimum entry credit (live bot trades higher-credit spreads)
+        # SPX: minimum $1.50, NDX: minimum $4.00 (these have good risk/reward)
+        min_credit = 4.00 if index_symbol == 'NDX' else 1.50
+        if entry_credit < min_credit:
             continue
 
         trade_num += 1
 
-        # Simulate the trade
+        # Simulate the trade with optimized parameters
+        # Stop loss 15% (adjusted for 30-second data granularity)
+        # Profit target 50%, Trailing stop enabled
         exit_time, exit_spread, exit_reason, pnl = simulate_trade(
             conn, timestamp, entry_credit, index_symbol, short_strike, long_strike, spread_type,
-            sl_pct=0.10, tp_pct=0.50, trailing_enabled=True
+            sl_pct=0.15, tp_pct=0.50, trailing_enabled=True
         )
 
         if exit_time is None:
@@ -305,6 +498,8 @@ def run_backtest():
             'vix': vix,
             'underlying': underlying,
             'peak_rank': peak_rank,
+            'strategy': setup.description if hasattr(setup, 'description') else 'N/A',
+            'is_ic': is_ic,
         })
 
     conn.close()
