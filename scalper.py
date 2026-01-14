@@ -804,13 +804,18 @@ MAX_DAILY_POSITIONS = 3  # Limit concurrent open positions to prevent unbounded 
 AUTOSCALING_ENABLED = True          # Enable Half-Kelly position sizing
 STARTING_CAPITAL = 20000             # Starting account balance ($20k for conservative start)
 MAX_CONTRACTS_PER_TRADE = 1          # RAMP-UP: Start with 1 contract (2026-01-12), increase after 1 month of live trading
-STOP_LOSS_PER_CONTRACT = 150         # Max loss per contract (from backtest data)
 ACCOUNT_BALANCE_FILE = f"{GAMMA_HOME}/data/account_balance.json"  # Track balance across restarts
 
+# INDEX-SPECIFIC BOOTSTRAP STATISTICS (2026-01-14)
+# Scale based on spread width: SPX (5pt) vs NDX (25pt spread = 5x wider)
+# SPX base values from realistic backtest
+_SPREAD_SCALE = INDEX_CONFIG.base_spread_width / 5  # 1.0 for SPX, 6.0 for NDX
+STOP_LOSS_PER_CONTRACT = int(150 * _SPREAD_SCALE)   # SPX: $150, NDX: $900
+
 # Bootstrap statistics (from realistic backtest until we have real data)
-BOOTSTRAP_WIN_RATE = 0.582           # 58.2% win rate (realistic mode)
-BOOTSTRAP_AVG_WIN = 266              # Avg winner per contract
-BOOTSTRAP_AVG_LOSS = 109             # Avg loser per contract
+BOOTSTRAP_WIN_RATE = 0.582           # 58.2% win rate (realistic mode, same for both)
+BOOTSTRAP_AVG_WIN = int(266 * _SPREAD_SCALE)        # SPX: $266, NDX: $1596 (scales with spread width)
+BOOTSTRAP_AVG_LOSS = int(109 * _SPREAD_SCALE)       # SPX: $109, NDX: $654 (scales with spread width)
 
 def load_account_balance():
     """Load account balance from file. Returns (balance, trade_stats dict)."""
@@ -1307,16 +1312,18 @@ try:
     # VIX = annualized volatility, convert to 2-hour expected move
     # Formula: SPX * (VIX/100) * sqrt(hours / (252 trading days * 6.5 hours/day))
     HOURS_TO_TP = 2.0
-    MIN_EXPECTED_MOVE = 10.0  # Minimum expected move in points to justify trade
+    # INDEX-SPECIFIC MINIMUM MOVE (2026-01-14)
+    # Scale based on spread width: SPX 10pts (5pt spread × 2), NDX 60pts (25pt spread × 2.4)
+    MIN_EXPECTED_MOVE = 10.0 * (INDEX_CONFIG.base_spread_width / 5)  # Scale by spread width
     expected_move_2hr = index_price * (vix / 100) * math.sqrt(HOURS_TO_TP / (252 * 6.5))
     log(f"Expected 2hr move: ±{expected_move_2hr:.1f} pts (1σ, 68% prob)")
     run_data['expected_move'] = expected_move_2hr
 
     if expected_move_2hr < MIN_EXPECTED_MOVE:
-        log(f"Expected move {expected_move_2hr:.1f} pts < {MIN_EXPECTED_MOVE} pts — volatility too low for TP")
+        log(f"Expected move {expected_move_2hr:.1f} pts < {MIN_EXPECTED_MOVE:.1f} pts — volatility too low for TP")
         log("NO TRADE — premium decay insufficient")
-        decision_logger.log_rejected(f"Expected 2hr move {expected_move_2hr:.1f}pts < {MIN_EXPECTED_MOVE}pts (volatility too low)")
-        send_discord_skip_alert(f"Expected move {expected_move_2hr:.1f} pts < {MIN_EXPECTED_MOVE} pts — volatility too low", run_data)
+        decision_logger.log_rejected(f"Expected 2hr move {expected_move_2hr:.1f}pts < {MIN_EXPECTED_MOVE:.1f}pts (volatility too low)")
+        send_discord_skip_alert(f"Expected move {expected_move_2hr:.1f} pts < {MIN_EXPECTED_MOVE:.1f} pts — volatility too low", run_data)
         raise SystemExit
 
     # === RSI FILTER (LIVE only) ===
@@ -1418,10 +1425,14 @@ try:
             raise SystemExit
         elif distance > 0:
             # SPX above pin - sell calls
-            setup = get_gex_trade_setup(pin_price, index_price + 5, vix, index_symbol=INDEX_CONFIG.code)  # Nudge to trigger call spread
+            # INDEX-AWARE NUDGE (2026-01-14): Use strike_increment to move 1 strike
+            nudge = INDEX_CONFIG.strike_increment
+            setup = get_gex_trade_setup(pin_price, index_price + nudge, vix, index_symbol=INDEX_CONFIG.code)  # Nudge by 1 strike to trigger call spread
         else:
             # SPX below pin - sell puts
-            setup = get_gex_trade_setup(pin_price, index_price - 5, vix, index_symbol=INDEX_CONFIG.code)  # Nudge to trigger put spread
+            # INDEX-AWARE NUDGE (2026-01-14): Use strike_increment to move 1 strike
+            nudge = INDEX_CONFIG.strike_increment
+            setup = get_gex_trade_setup(pin_price, index_price - nudge, vix, index_symbol=INDEX_CONFIG.code)  # Nudge by 1 strike to trigger put spread
         log(f"Converted to: {setup['description']}")
 
     # === SHORT STRIKE PROXIMITY CHECK ===
