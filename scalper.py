@@ -273,6 +273,7 @@ CUTOFF_HOUR = 13  # No new trades after 1 PM ET (optimized for afternoon degrada
 # Import shared GEX strategy logic (single source of truth)
 # This ensures backtest and live scalper use identical setup logic
 from core.gex_strategy import get_gex_trade_setup as core_get_gex_trade_setup
+from core.broken_wing_ic_calculator import BrokenWingICCalculator
 
 print("=" * 70)
 print(f"Index: {INDEX_CONFIG.name} ({INDEX_CONFIG.code})")
@@ -576,6 +577,27 @@ def calculate_gap_size():
         log(f"Gap calculation error: {e}")
         return 0.0  # Default to no filter on error
 
+def store_gex_polarity(nearby_peaks):
+    """Calculate GEX polarity from peaks and store in run_data for BWIC decisions.
+
+    Args:
+        nearby_peaks: List of (strike, gex_value) tuples
+    """
+    if not nearby_peaks:
+        run_data['gex_polarity_index'] = 0.0
+        run_data['gex_magnitude'] = 0
+        return
+
+    # Use BWIC calculator to compute polarity
+    polarity = BrokenWingICCalculator.calculate_gex_polarity(nearby_peaks)
+    run_data['gex_polarity_index'] = polarity.gpi
+    run_data['gex_magnitude'] = polarity.magnitude
+    run_data['gex_direction'] = polarity.direction
+    run_data['gex_confidence'] = polarity.confidence
+
+    log(f"GEX Polarity: GPI={polarity.gpi:+.3f} ({polarity.direction}), "
+        f"Magnitude={polarity.magnitude/1e9:.1f}B ({polarity.confidence})")
+
 def calculate_gex_pin(index_price):
     """Calculate real GEX pin from options open interest and gamma data (index-agnostic).
 
@@ -729,6 +751,7 @@ def calculate_gex_pin(index_price):
                     log(f"   Midpoint between {peak1_strike} and {peak2_strike}")
                     log(f"   Strategy: Iron Condor (profit from caged volatility)")
 
+                    store_gex_polarity(nearby_peaks)
                     return pin_strike
 
             # No competing peaks - use top peak (normal case)
@@ -738,6 +761,7 @@ def calculate_gex_pin(index_price):
             distance_pct = distance / index_price * 100
             log(f"GEX PIN (proximity-weighted): {pin_strike} (GEX={pin_gex/1e9:.1f}B, {distance_pct:.2f}% away)")
 
+            store_gex_polarity(nearby_peaks)
             return pin_strike
         else:
             # No positive GEX near spot, use highest absolute
@@ -745,13 +769,16 @@ def calculate_gex_pin(index_price):
             if all_near:
                 pin_strike, _ = max(all_near, key=lambda x: abs(x[1]))
                 log(f"GEX PIN (no positive near): {pin_strike}")
+                store_gex_polarity([])  # Neutral polarity (fallback mode)
                 return pin_strike
 
             log("No GEX strikes found near spot price")
+            store_gex_polarity([])  # Neutral polarity
             return None
 
     except Exception as e:
         log(f"GEX calculation error: {e}")
+        store_gex_polarity([])  # Neutral polarity on error
         return None
 
 # RSI filter range (FIX 2026-01-10: Widened from 50-70 to 30-80, then raised floor to 40)
@@ -1064,6 +1091,92 @@ def check_vix_spike(current_vix, lookback_minutes=5):
         log(f"VIX spike check failed: {e}, assuming safe")
         return True, None  # On error, don't block trade
 
+def apply_bwic_to_ic(setup, index_price, vix):
+    """
+    Apply Broken Wing Iron Condor (BWIC) logic to IC setups.
+
+    Args:
+        setup: Dict with IC setup data (from get_gex_trade_setup)
+        index_price: Current index price
+        vix: Current VIX level
+
+    Returns:
+        Modified setup dict with BWIC strikes if applicable, otherwise original setup
+    """
+    # Only apply BWIC to Iron Condor setups
+    if setup['strategy'] != 'IC':
+        return setup
+
+    # Get GEX polarity from run_data (populated by calculate_gex_pin)
+    gpi = run_data.get('gex_polarity_index', 0.0)
+    gex_magnitude = run_data.get('gex_magnitude', 0)
+
+    # Decide if we should use BWIC
+    should_use, reason = BrokenWingICCalculator.should_use_bwic(
+        gex_magnitude=gex_magnitude,
+        gpi=gpi,
+        has_competing_peaks=False,
+        vix=vix
+    )
+
+    if not should_use:
+        log(f"IC: Using symmetric wings — {reason}")
+        return setup
+
+    # Calculate BWIC wing widths
+    widths = BrokenWingICCalculator.get_bwic_wing_widths(
+        gpi=gpi,
+        vix=vix,
+        gex_magnitude=gex_magnitude,
+        use_bwic=True
+    )
+
+    # Extract current strikes
+    call_short, call_long, put_short, put_long = setup['strikes']
+    current_call_width = call_long - call_short
+    current_put_width = put_short - put_long
+
+    # Calculate new strikes using BWIC widths
+    # Maintain the same short strikes, adjust long strikes
+    call_short_new = call_short
+    call_long_new = call_short_new + widths.call_width
+    put_short_new = put_short
+    put_long_new = put_short_new - widths.put_width
+
+    # Round to strike increments
+    call_short_new = INDEX_CONFIG.round_strike(call_short_new)
+    call_long_new = INDEX_CONFIG.round_strike(call_long_new)
+    put_short_new = INDEX_CONFIG.round_strike(put_short_new)
+    put_long_new = INDEX_CONFIG.round_strike(put_long_new)
+
+    # Validate the new strikes
+    is_valid, validation_msg = BrokenWingICCalculator.validate_bwic_strikes(
+        call_short=call_short_new,
+        call_long=call_long_new,
+        put_short=put_short_new,
+        put_long=put_long_new,
+        current_price=index_price,
+        is_bwic=True
+    )
+
+    if not is_valid:
+        log(f"IC: BWIC validation failed ({validation_msg}), using symmetric wings")
+        return setup
+
+    # Update setup with BWIC strikes
+    setup['strikes'] = [call_short_new, call_long_new, put_short_new, put_long_new]
+    setup['description'] = (
+        f"BWIC: {call_short_new}/{call_long_new}C ({widths.call_width}pt) + "
+        f"{put_short_new}/{put_long_new}P ({widths.put_width}pt) "
+        f"[{widths.rationale}]"
+    )
+
+    log(f"✅ BWIC Applied: {widths.rationale}")
+    log(f"   Calls: {call_short}/{call_long} → {call_short_new}/{call_long_new}")
+    log(f"   Puts: {put_short}/{put_long} → {put_short_new}/{put_long_new}")
+
+    return setup
+
 def get_gex_trade_setup(pin_price, index_price, vix):
     """
     Wrapper for core.gex_strategy.get_gex_trade_setup (index-agnostic)
@@ -1257,6 +1370,10 @@ try:
 
     # === SMART TRADE SETUP ===
     setup = get_gex_trade_setup(pin_price, index_price, vix)
+
+    # === APPLY BWIC (Broken Wing IC) if conditions met ===
+    setup = apply_bwic_to_ic(setup, index_price, vix)
+
     log(f"Trade setup: {setup['description']} | Confidence: {setup['confidence']}")
     run_data['setup'] = f"{setup['description']} ({setup['confidence']})"
 
