@@ -77,7 +77,7 @@ def get_spread_width(vix: float) -> int:
 
 
 def get_gex_trade_setup(pin_price: float, spx_price: float, vix: float,
-                         vix_threshold: float = 20.0) -> GEXTradeSetup:
+                         vix_threshold: float = 20.0, index_symbol: str = 'SPX') -> GEXTradeSetup:
     """
     PURE FUNCTION: Determine trade setup based on GEX pin level.
 
@@ -86,9 +86,10 @@ def get_gex_trade_setup(pin_price: float, spx_price: float, vix: float,
 
     Args:
         pin_price: GEX pin price level
-        spx_price: Current SPX price
+        spx_price: Current price (SPX or NDX depending on index_symbol)
         vix: Current VIX level
         vix_threshold: Skip trading if VIX >= this level
+        index_symbol: Index name ('SPX' or 'NDX') for logging purposes
 
     Returns:
         GEXTradeSetup with strategy details
@@ -219,7 +220,7 @@ def get_gex_trade_setup(pin_price: float, spx_price: float, vix: float,
             direction=None,
             distance=distance,
             confidence='LOW',
-            description=f'SPX {abs_distance:.0f}pts from pin — too far, skip',
+            description=f'{index_symbol} {abs_distance:.0f}pts from pin — too far, skip',
             spread_width=spread_width,
             vix=vix
         )

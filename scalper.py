@@ -25,6 +25,7 @@ import datetime, requests, json, csv, pytz, time, math, fcntl, tempfile
 import yfinance as yf
 import pandas as pd
 from datetime import date
+from decision_logger import DecisionLogger
 
 # ==================== CONFIG ====================
 from config import (PAPER_ACCOUNT_ID, LIVE_ACCOUNT_ID, TRADIER_LIVE_KEY, TRADIER_SANDBOX_KEY,
@@ -1181,7 +1182,7 @@ def apply_bwic_to_ic(setup, index_price, vix):
 
     return setup
 
-def get_gex_trade_setup(pin_price, index_price, vix):
+def get_gex_trade_setup(pin_price, index_price, vix, index_symbol='SPX'):
     """
     Wrapper for core.gex_strategy.get_gex_trade_setup (index-agnostic)
 
@@ -1192,11 +1193,17 @@ def get_gex_trade_setup(pin_price, index_price, vix):
 
     Uses shared module: core.gex_strategy (single source of truth)
     This ensures backtest and live scalper use IDENTICAL logic.
+
+    Args:
+        pin_price: GEX pin price level
+        index_price: Current index price (SPX or NDX)
+        vix: Current VIX level
+        index_symbol: 'SPX' or 'NDX' (for logging/reporting)
     """
     # Use core module (GEXTradeSetup dataclass) with default vix_threshold=20.0
     # CRITICAL-1 FIX (2026-01-13): Pass vix_threshold (float) not INDEX_CONFIG (object)
     # VIX >= 20 skips trading (too volatile for 0DTE)
-    setup = core_get_gex_trade_setup(pin_price, index_price, vix, vix_threshold=20.0)
+    setup = core_get_gex_trade_setup(pin_price, index_price, vix, vix_threshold=20.0, index_symbol=index_symbol)
 
     # Convert dataclass to dict for backwards compatibility
     return {
@@ -1231,6 +1238,9 @@ try:
         raise SystemExit
 
     log("GEX Scalper started")
+
+    # Initialize decision logger for this run
+    decision_logger = DecisionLogger()
 
     # === TIMING BLACKOUT FILTER ===
     # OPTIMIZATION (2026-01-13): Avoid market open volatility (9:30-10:00 AM)
@@ -1305,6 +1315,7 @@ try:
     if expected_move_2hr < MIN_EXPECTED_MOVE:
         log(f"Expected move {expected_move_2hr:.1f} pts < {MIN_EXPECTED_MOVE} pts — volatility too low for TP")
         log("NO TRADE — premium decay insufficient")
+        decision_logger.log_rejected(f"Expected 2hr move {expected_move_2hr:.1f}pts < {MIN_EXPECTED_MOVE}pts (volatility too low)")
         send_discord_skip_alert(f"Expected move {expected_move_2hr:.1f} pts < {MIN_EXPECTED_MOVE} pts — volatility too low", run_data)
         raise SystemExit
 
@@ -1314,6 +1325,7 @@ try:
     run_data['rsi'] = rsi
     if rsi < RSI_MIN or rsi > RSI_MAX:
         log(f"RSI {rsi} outside {RSI_MIN}-{RSI_MAX} range — NO TRADE")
+        decision_logger.log_rejected(f"RSI {rsi:.1f} outside {RSI_MIN}-{RSI_MAX} range")
         send_discord_skip_alert(f"RSI {rsi:.1f} outside {RSI_MIN}-{RSI_MAX} range", run_data)
         raise SystemExit
 
@@ -1322,6 +1334,7 @@ try:
     if SKIP_FRIDAY and today.weekday() == 4:
         if mode == "REAL":
             log("Friday — NO TRADE TODAY (historically underperforms)")
+            decision_logger.log_rejected("Friday - historically underperforms (0DTE skipped)")
             send_discord_skip_alert("Friday — historically underperforms", run_data)
             raise SystemExit
         else:
@@ -1333,6 +1346,7 @@ try:
     run_data['consec_down'] = consec_down
     if consec_down > MAX_CONSEC_DOWN_DAYS:
         log(f"{consec_down} consecutive down days (>{MAX_CONSEC_DOWN_DAYS}) — NO TRADE TODAY")
+        decision_logger.log_rejected(f"{consec_down} consecutive down days (>{MAX_CONSEC_DOWN_DAYS})")
         send_discord_skip_alert(f"{consec_down} consecutive down days (>{MAX_CONSEC_DOWN_DAYS})", run_data)
         raise SystemExit
 
@@ -1346,6 +1360,7 @@ try:
     if gap_pct > MAX_GAP_PCT:
         log(f"Gap {gap_pct:.2f}% exceeds {MAX_GAP_PCT}% — NO TRADE TODAY")
         log("Large gaps disrupt GEX pin dynamics — historically 12.5% WR, -$1,774 P&L")
+        decision_logger.log_rejected(f"Gap {gap_pct:.2f}% > {MAX_GAP_PCT}% limit (GEX pin disrupted)")
         send_discord_skip_alert(f"Gap {gap_pct:.2f}% > {MAX_GAP_PCT}% limit", run_data)
         raise SystemExit
 
@@ -1353,6 +1368,7 @@ try:
     if today.weekday() >= 5:
         log("Weekend — no 0DTE trading")
         log("NO TRADE TODAY")
+        decision_logger.log_rejected("Weekend - no 0DTE trading (market closed)")
         send_discord_skip_alert("Weekend — no 0DTE trading", run_data)
         raise SystemExit
     exp_short = today.strftime("%y%m%d")
@@ -1366,6 +1382,7 @@ try:
         pin_price = calculate_gex_pin(index_price)
         if pin_price is None:
             log("FATAL: Could not calculate GEX pin — NO TRADE")
+            decision_logger.log_rejected("GEX pin calculation failed (options data unavailable)")
             send_discord_skip_alert("GEX pin calculation failed — no trade without real GEX data", run_data)
             raise SystemExit
         log(f"REAL GEX PIN → {pin_price}")
@@ -1373,7 +1390,7 @@ try:
     run_data['distance'] = abs(index_price - pin_price)
 
     # === SMART TRADE SETUP ===
-    setup = get_gex_trade_setup(pin_price, index_price, vix)
+    setup = get_gex_trade_setup(pin_price, index_price, vix, index_symbol=INDEX_CONFIG.code)
 
     # === APPLY BWIC (Broken Wing IC) if conditions met ===
     setup = apply_bwic_to_ic(setup, index_price, vix)
@@ -1383,6 +1400,7 @@ try:
 
     if setup['strategy'] == 'SKIP':
         log("NO TRADE TODAY — conditions not met")
+        decision_logger.log_rejected(setup.get('description', 'Conditions not favorable for GEX strategy'))
         send_discord_skip_alert(f"{setup.get('description', 'Conditions not met')}", run_data)
         raise SystemExit
 
@@ -1400,10 +1418,10 @@ try:
             raise SystemExit
         elif distance > 0:
             # SPX above pin - sell calls
-            setup = get_gex_trade_setup(pin_price, index_price + 5, vix)  # Nudge to trigger call spread
+            setup = get_gex_trade_setup(pin_price, index_price + 5, vix, index_symbol=INDEX_CONFIG.code)  # Nudge to trigger call spread
         else:
             # SPX below pin - sell puts
-            setup = get_gex_trade_setup(pin_price, index_price - 5, vix)  # Nudge to trigger put spread
+            setup = get_gex_trade_setup(pin_price, index_price - 5, vix, index_symbol=INDEX_CONFIG.code)  # Nudge to trigger put spread
         log(f"Converted to: {setup['description']}")
 
     # === SHORT STRIKE PROXIMITY CHECK ===
@@ -1728,6 +1746,10 @@ try:
     log(f"ACTUAL CREDIT RECEIVED: ${credit:.2f}  →  ${dollar_credit:.0f} per contract")
     log(f"FINAL {int((1-tp_pct)*100)}% PROFIT TARGET → Close at ${tp_price:.2f}  →  +${tp_profit:.0f} profit")
     log(f"FINAL 10% STOP LOSS → Close at ${sl_price:.2f}  →  -${sl_loss:.0f} loss")
+
+    # Log the successful placement decision
+    reason = f"{setup['description']} | Pin at {int(pin_price)}, SPX at {int(index_price)}, VIX {vix:.1f}"
+    decision_logger.log_placed(setup['confidence'], credit, reason)
 
     # === DISCORD ENTRY ALERT ===
     send_discord_entry_alert(setup, credit, strikes, tp_pct, order_id)
