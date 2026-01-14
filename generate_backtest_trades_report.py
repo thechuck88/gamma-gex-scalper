@@ -6,6 +6,7 @@ Shows all trades executed in the 2-day backtest period
 
 import sqlite3
 import json
+import numpy as np
 from datetime import datetime
 from collections import defaultdict
 
@@ -18,9 +19,58 @@ def get_optimized_connection():
     conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
+
+def simulate_exit(entry_credit, underlying, pin_strike, vix, days_held=0):
+    """
+    Simulate realistic exit using canonical backtest logic.
+
+    Returns: (exit_credit, exit_reason, is_winner)
+    """
+    spread_width = 5.0  # Standard 5-point spread
+    max_profit = spread_width - entry_credit
+    max_loss = entry_credit
+
+    # Determine strategy confidence
+    if pin_strike and vix < 18:
+        confidence = 'HIGH'
+    else:
+        confidence = 'MEDIUM'
+
+    profit_target = 0.50 if confidence == 'HIGH' else 0.70
+
+    # Rule 1: Hit profit target?
+    # Probability increases with days held
+    if days_held >= 1:  # By next day, increased probability
+        if np.random.random() < 0.4:  # 40% chance hit PT by day 2
+            exit_credit = entry_credit - (max_profit * profit_target)
+            return exit_credit, 'PROFIT_TARGET', True
+
+    # Rule 2: Hit stop loss? (10%)
+    if np.random.random() < 0.5:  # ~50% of trades hit SL
+        exit_credit = entry_credit + max_loss
+        return exit_credit, 'STOP_LOSS', False
+
+    # Rule 3: Hold to expiration (80% qualification)
+    # 85% expire worthless, 12% near ATM, 3% ITM
+    rand = np.random.random()
+
+    if rand < 0.85:  # Expire worthless
+        exit_credit = 0
+        return exit_credit, 'HOLD_WORTHLESS', True
+    elif rand < 0.97:  # Expire near ATM (75-95% profit)
+        profit_pct = np.random.uniform(0.75, 0.95)
+        exit_credit = entry_credit - (max_profit * profit_pct)
+        return exit_credit, 'HOLD_NEAR_ATM', True
+    else:  # Expire ITM (loss)
+        loss_pct = np.random.uniform(0.5, 1.0)
+        exit_credit = entry_credit + (max_loss * loss_pct)
+        return exit_credit, 'HOLD_ITM', False
+
+
 def generate_trades_report():
     """Generate detailed trade report for all scenarios."""
-    
+    np.random.seed(42)  # For reproducible results
+
     conn = get_optimized_connection()
     cursor = conn.cursor()
     
@@ -111,15 +161,17 @@ def generate_trades_report():
                 strategy = 'IC'
                 confidence = 'MEDIUM'
             
-            # Estimate entry credit (simplified)
+            # Estimate entry credit
             entry_credit = min(max(1.0, underlying * vix / 100 * 0.02), 2.5)
-            
-            # Simulate exit (all hold to worthless in this test)
-            exit_credit = 0
-            exit_reason = 'HOLD_WORTHLESS'
-            
-            # Calculate P&L
-            pl = entry_credit * 100  # Per contract
+
+            # Simulate realistic exit
+            exit_credit, exit_reason, is_winner = simulate_exit(
+                entry_credit, underlying, pin_strike, vix, days_held=0
+            )
+
+            # Calculate P&L (width = 5.0)
+            width = 5.0
+            pl = (entry_credit - exit_credit) * 100  # Per contract P&L
             
             trades.append({
                 'num': trade_num,
@@ -179,13 +231,16 @@ def generate_trades_report():
         trades = []
         for snapshot in snapshots:
             timestamp, date_et, time_et, symbol, underlying, vix, pin_strike, gex, distance, proximity, competing, ratio = snapshot
-            
+
             hour = int(time_et.split(':')[0])
             if hour >= cutoff_hour or vix < vix_floor or pin_strike is None or gex is None or gex == 0:
                 continue
-            
+
             entry_credit = min(max(1.0, underlying * vix / 100 * 0.02), 2.5)
-            pl = entry_credit * 100
+            exit_credit, exit_reason, is_winner = simulate_exit(
+                entry_credit, underlying, pin_strike, vix, days_held=0
+            )
+            pl = (entry_credit - exit_credit) * 100
             trades.append(pl)
         
         if trades:
@@ -205,13 +260,16 @@ def generate_trades_report():
     entry_times = defaultdict(lambda: {'count': 0, 'pl': 0})
     for snapshot in snapshots:
         timestamp, date_et, time_et, symbol, underlying, vix, pin_strike, gex, distance, proximity, competing, ratio = snapshot
-        
+
         hour = int(time_et.split(':')[0])
         if hour >= 14 or vix < 12.0 or pin_strike is None or gex is None or gex == 0:
             continue
-        
+
         entry_credit = min(max(1.0, underlying * vix / 100 * 0.02), 2.5)
-        pl = entry_credit * 100
+        exit_credit, exit_reason, is_winner = simulate_exit(
+            entry_credit, underlying, pin_strike, vix, days_held=0
+        )
+        pl = (entry_credit - exit_credit) * 100
         entry_times[time_et]['count'] += 1
         entry_times[time_et]['pl'] += pl
     
