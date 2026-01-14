@@ -104,6 +104,21 @@ def get_gex_trade_setup(pin_price: float, spx_price: float, vix: float,
     if spread_width <= 0:
         spread_width = 5  # Default fallback to 5pt SPX spread
 
+    # INDEX-SPECIFIC TOLERANCE SCALING (2026-01-14)
+    # NDX tolerances are 5× larger than SPX due to 10pt strike increment
+    tolerance_scale = 5 if index_symbol == 'NDX' else 1
+    near_pin_max = NEAR_PIN_MAX * tolerance_scale
+    moderate_distance_max = MODERATE_DISTANCE_MAX * tolerance_scale
+    far_from_pin_max = FAR_FROM_PIN_MAX * tolerance_scale
+    too_far_min = TOO_FAR_MIN * tolerance_scale
+
+    # INDEX-AWARE STRIKE ROUNDING (2026-01-14)
+    # SPX: round to 5, NDX: round to 10
+    strike_increment = 10 if index_symbol == 'NDX' else 5
+    def round_to_increment(price: float) -> int:
+        """Round price to nearest strike increment"""
+        return round(price / strike_increment) * strike_increment
+
     # === VIX TOO HIGH: Skip ===
     if vix >= vix_threshold:
         return GEXTradeSetup(
@@ -117,13 +132,13 @@ def get_gex_trade_setup(pin_price: float, spx_price: float, vix: float,
             vix=vix
         )
 
-    # === NEAR PIN (0-6 pts): Iron Condor (symmetric wings) ===
-    if abs_distance <= NEAR_PIN_MAX:
-        ic_buffer = IC_WING_BUFFER
-        call_short = round_to_5(pin_price + ic_buffer)
-        call_long = round_to_5(call_short + spread_width)
-        put_short = round_to_5(pin_price - ic_buffer)
-        put_long = round_to_5(put_short - spread_width)
+    # === NEAR PIN (0-6 pts for SPX, 0-30 pts for NDX): Iron Condor (symmetric wings) ===
+    if abs_distance <= near_pin_max:
+        ic_buffer = IC_WING_BUFFER * tolerance_scale
+        call_short = round_to_increment(pin_price + ic_buffer)
+        call_long = round_to_increment(call_short + spread_width)
+        put_short = round_to_increment(pin_price - ic_buffer)
+        put_long = round_to_increment(put_short - spread_width)
 
         return GEXTradeSetup(
             strategy='IC',
@@ -136,16 +151,16 @@ def get_gex_trade_setup(pin_price: float, spx_price: float, vix: float,
             vix=vix
         )
 
-    # === MODERATE DISTANCE (7-15 pts): Directional spread (HIGH confidence) ===
-    elif MODERATE_DISTANCE_MIN <= abs_distance <= MODERATE_DISTANCE_MAX:
-        pin_buffer = MODERATE_PIN_BUFFER
-        spx_buffer = MODERATE_SPX_BUFFER
+    # === MODERATE DISTANCE (7-15 pts for SPX, 35-75 pts for NDX): Directional spread (HIGH confidence) ===
+    elif MODERATE_DISTANCE_MIN * tolerance_scale <= abs_distance <= moderate_distance_max:
+        pin_buffer = MODERATE_PIN_BUFFER * tolerance_scale
+        spx_buffer = MODERATE_SPX_BUFFER * tolerance_scale
 
         if distance > 0:  # SPX ABOVE pin → expect pullback → CALL spread
             pin_based = pin_price + pin_buffer
             spx_based = spx_price + spx_buffer
-            short_strike = round_to_5(max(pin_based, spx_based))
-            long_strike = round_to_5(short_strike + spread_width)
+            short_strike = round_to_increment(max(pin_based, spx_based))
+            long_strike = round_to_increment(short_strike + spread_width)
 
             return GEXTradeSetup(
                 strategy='CALL',
@@ -160,8 +175,8 @@ def get_gex_trade_setup(pin_price: float, spx_price: float, vix: float,
         else:  # SPX BELOW pin → expect rally → PUT spread
             pin_based = pin_price - pin_buffer
             spx_based = spx_price - spx_buffer
-            short_strike = round_to_5(min(pin_based, spx_based))
-            long_strike = round_to_5(short_strike - spread_width)
+            short_strike = round_to_increment(min(pin_based, spx_based))
+            long_strike = round_to_increment(short_strike - spread_width)
 
             return GEXTradeSetup(
                 strategy='PUT',
@@ -174,16 +189,16 @@ def get_gex_trade_setup(pin_price: float, spx_price: float, vix: float,
                 vix=vix
             )
 
-    # === FAR FROM PIN (16-25 pts): Conservative spread (MEDIUM confidence) ===
-    elif FAR_FROM_PIN_MIN <= abs_distance <= FAR_FROM_PIN_MAX:
-        pin_buffer = FAR_PIN_BUFFER
-        spx_buffer = FAR_SPX_BUFFER
+    # === FAR FROM PIN (16-50 pts for SPX, 80-250 pts for NDX): Conservative spread (MEDIUM confidence) ===
+    elif FAR_FROM_PIN_MIN * tolerance_scale <= abs_distance <= far_from_pin_max:
+        pin_buffer = FAR_PIN_BUFFER * tolerance_scale
+        spx_buffer = FAR_SPX_BUFFER * tolerance_scale
 
         if distance > 0:  # SPX ABOVE pin → CALL spread
             pin_based = pin_price + pin_buffer
             spx_based = spx_price + spx_buffer
-            short_strike = round_to_5(max(pin_based, spx_based))
-            long_strike = round_to_5(short_strike + spread_width)
+            short_strike = round_to_increment(max(pin_based, spx_based))
+            long_strike = round_to_increment(short_strike + spread_width)
 
             return GEXTradeSetup(
                 strategy='CALL',
@@ -198,8 +213,8 @@ def get_gex_trade_setup(pin_price: float, spx_price: float, vix: float,
         else:  # SPX BELOW pin → PUT spread
             pin_based = pin_price - pin_buffer
             spx_based = spx_price - spx_buffer
-            short_strike = round_to_5(min(pin_based, spx_based))
-            long_strike = round_to_5(short_strike - spread_width)
+            short_strike = round_to_increment(min(pin_based, spx_based))
+            long_strike = round_to_increment(short_strike - spread_width)
 
             return GEXTradeSetup(
                 strategy='PUT',
@@ -212,7 +227,7 @@ def get_gex_trade_setup(pin_price: float, spx_price: float, vix: float,
                 vix=vix
             )
 
-    # === TOO FAR (>25 pts): Skip ===
+    # === TOO FAR (>50 pts for SPX, >250 pts for NDX): Skip ===
     else:
         return GEXTradeSetup(
             strategy='SKIP',
@@ -220,7 +235,7 @@ def get_gex_trade_setup(pin_price: float, spx_price: float, vix: float,
             direction=None,
             distance=distance,
             confidence='LOW',
-            description=f'{index_symbol} {abs_distance:.0f}pts from pin — too far, skip',
+            description=f'{index_symbol} {abs_distance:.0f}pts from pin — too far, skip (limit: {far_from_pin_max}pts)',
             spread_width=spread_width,
             vix=vix
         )
