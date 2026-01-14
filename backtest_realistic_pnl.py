@@ -188,7 +188,9 @@ def run_backtest():
     conn = get_optimized_connection()
     cursor = conn.cursor()
 
-    # Get all GEX peaks (entry opportunities) - primary peaks only
+    # Get all GEX peaks (entry opportunities) - ALL peaks, not just rank 1
+    # Live bot trades multiple peaks per timestamp, not just the primary one
+    # Also trades both SPX and NDX, not just SPX
     query = """
     SELECT
         g.timestamp,
@@ -197,15 +199,14 @@ def run_backtest():
         s.vix,
         g.strike as pin_strike,
         g.gex,
+        g.peak_rank,
         c.is_competing
     FROM gex_peaks g
     LEFT JOIN options_snapshots s ON g.timestamp = s.timestamp
         AND g.index_symbol = s.index_symbol
     LEFT JOIN competing_peaks c ON g.timestamp = c.timestamp
         AND g.index_symbol = c.index_symbol
-    WHERE g.index_symbol = 'SPX'
-    AND g.peak_rank = 1
-    ORDER BY g.timestamp ASC
+    ORDER BY g.timestamp ASC, g.index_symbol ASC, g.peak_rank ASC
     """
 
     cursor.execute(query)
@@ -215,7 +216,7 @@ def run_backtest():
     trade_num = 0
 
     for snapshot in snapshots:
-        timestamp, index_symbol, underlying, vix, pin_strike, gex, competing = snapshot
+        timestamp, index_symbol, underlying, vix, pin_strike, gex, peak_rank, competing = snapshot
 
         # Filter: Only trade valid GEX peaks
         if pin_strike is None or gex is None or gex == 0:
@@ -265,6 +266,7 @@ def run_backtest():
             'pnl': pnl,
             'vix': vix,
             'underlying': underlying,
+            'peak_rank': peak_rank,
         })
 
     conn.close()
@@ -280,6 +282,7 @@ def print_report(trades):
     print("="*80)
     print(f"\nDatabase: {DB_PATH}")
     print(f"Period: 2026-01-12 to 2026-01-13 (2 trading days)")
+    print(f"Indices: SPX + NDX (all peaks, all ranks)")
     print(f"Data source: options_prices_live table (real bid/ask spreads)")
 
     if not trades:
@@ -337,12 +340,12 @@ def print_report(trades):
     print(f"\n" + "="*80)
     print("TRADE DETAILS")
     print("="*80)
-    print(f"{'#':<4} {'Time':<10} {'Strikes':<15} {'Entry$':<8} {'Exit$':<8} {'Exit Reason':<15} {'P&L':<8}")
+    print(f"{'#':<4} {'Time':<10} {'Rk':<3} {'Strikes':<15} {'Entry$':<8} {'Exit$':<8} {'Exit Reason':<15} {'P&L':<8}")
     print("-"*80)
 
     for t in trades:
         strikes = f"{t['short_strike']:.0f}/{t['long_strike']:.0f}"
-        print(f"{t['num']:<4} {t['entry_time']:<10} {strikes:<15} "
+        print(f"{t['num']:<4} {t['entry_time']:<10} {t['peak_rank']:<3} {strikes:<15} "
               f"${t['entry_credit']:<7.2f} ${t['exit_spread']:<7.2f} {t['exit_reason']:<15} ${t['pnl']:<7.0f}")
 
     print("\n" + "="*80)
