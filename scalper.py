@@ -792,7 +792,7 @@ RSI_MIN = 40  # Was 30 (0% WR zone), originally 50 (too restrictive)
 RSI_MAX = 80  # Was 70 (too restrictive)
 
 # Skip Fridays (day 4 = Friday)
-SKIP_FRIDAY = True
+SKIP_FRIDAY = False  # User requested: Allow Friday trading (2026-01-16)
 
 # Skip after N consecutive down days (FIX 2026-01-10: Increased from 2 to 5)
 MAX_CONSEC_DOWN_DAYS = 5  # Skip if 6+ down days (was 2 - too conservative)
@@ -1101,6 +1101,74 @@ def check_vix_spike(current_vix, lookback_minutes=5):
         log(f"VIX spike check failed: {e}, assuming safe")
         return True, None  # On error, don't block trade
 
+def check_realized_volatility(index_symbol="SPX", lookback_minutes=30):
+    """
+    Check if recent intraday volatility is abnormally high.
+
+    Measures actual SPX/NDX bar ranges vs historical baseline to detect
+    choppy/whipsaw conditions that VIX doesn't capture.
+
+    Returns (is_safe, message):
+    - (True, None) if volatility is normal
+    - (False, reason) if recent volatility too high (choppy market)
+
+    Why this matters: VIX measures EXPECTED volatility. On days like 2026-01-15,
+    VIX was calm (13-15) but SPX whipsawed hard intraday, causing 3 quick stops.
+    This filter catches that by measuring ACTUAL bar-by-bar movement.
+
+    Threshold: 2.5x normal 5-min bar range indicates choppy conditions
+    Example: Normal bar range 5pts, recent avg 13pts = skip trade
+    """
+    try:
+        # Use index-specific ticker
+        ticker_map = {
+            'SPX': '^GSPC',
+            'NDX': '^NDX'
+        }
+        ticker = ticker_map.get(index_symbol, '^GSPC')
+
+        # Download recent 5-min bars (need lookback + 1 day for baseline)
+        data = yf.download(ticker, period="2d", interval="5m", progress=False, auto_adjust=True)
+
+        if len(data) < 20:
+            log("Realized vol check: insufficient data, assuming safe")
+            return True, None  # Can't check, assume safe
+
+        # Calculate bar ranges (High - Low)
+        data['bar_range'] = data['High'] - data['Low']
+
+        # Get recent bars (last N minutes)
+        bars_needed = lookback_minutes // 5  # 30 min = 6 bars
+        recent_bars = data.tail(bars_needed)
+        recent_avg_range = recent_bars['bar_range'].mean()
+
+        # Calculate baseline normal volatility (previous day's bars)
+        # Use day before today to avoid contaminating with current choppy session
+        baseline_bars = data.iloc[:-bars_needed]  # Everything except recent
+        baseline_avg_range = baseline_bars['bar_range'].mean()
+
+        # Threshold: 2.5x normal indicates choppy/whipsaw market
+        VOLATILITY_MULTIPLIER = 2.5
+        threshold = baseline_avg_range * VOLATILITY_MULTIPLIER
+
+        log(f"Realized vol check: Recent {recent_avg_range:.1f}pts avg vs baseline {baseline_avg_range:.1f}pts")
+        log(f"  Threshold: {threshold:.1f}pts ({VOLATILITY_MULTIPLIER}x baseline)")
+
+        if recent_avg_range > threshold:
+            ratio = recent_avg_range / baseline_avg_range
+            reason = (f"Intraday volatility {recent_avg_range:.1f}pts is {ratio:.1f}x baseline "
+                     f"({baseline_avg_range:.1f}pts) - market too choppy")
+            log(f"❌ High realized volatility: {reason}")
+            return False, reason
+
+        ratio = recent_avg_range / baseline_avg_range
+        log(f"✅ Realized volatility OK: {ratio:.1f}x baseline (< {VOLATILITY_MULTIPLIER}x threshold)")
+        return True, None
+
+    except Exception as e:
+        log(f"Realized vol check failed: {e}, assuming safe")
+        return True, None  # On error, don't block trade
+
 def apply_bwic_to_ic(setup, index_price, vix):
     """
     Apply Broken Wing Iron Condor (BWIC) logic to IC setups.
@@ -1305,6 +1373,18 @@ try:
         log(f"VIX spike detected: {vix_spike_reason}")
         log("NO TRADE — VIX rising too fast indicates unstable conditions")
         send_discord_skip_alert(f"VIX spike: {vix_spike_reason}", run_data)
+        raise SystemExit
+
+    # === REALIZED VOLATILITY FILTER ===
+    # OPTIMIZATION (2026-01-15): Detect choppy intraday conditions
+    # Analysis: 2026-01-15 had 3 quick stops despite calm VIX (13-15)
+    # VIX measures EXPECTED volatility, this measures ACTUAL bar-by-bar movement
+    # Catches whipsaw/choppy days where GEX pin effect fails
+    rvol_safe, rvol_reason = check_realized_volatility(INDEX_CONFIG.code, lookback_minutes=30)
+    if not rvol_safe:
+        log(f"High realized volatility: {rvol_reason}")
+        log("NO TRADE — Market too choppy, GEX pin unreliable in whipsaw conditions")
+        send_discord_skip_alert(f"Choppy market: {rvol_reason}", run_data)
         raise SystemExit
 
     # === EXPECTED MOVE FILTER ===
