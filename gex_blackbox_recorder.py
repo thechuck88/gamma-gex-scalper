@@ -169,8 +169,11 @@ def cleanup_old_data(retention_days=365):
         cursor = conn.cursor()
 
         # Calculate cutoff date
-        from datetime import datetime, timedelta
-        cutoff = datetime.now() - timedelta(days=retention_days)
+        # BUGFIX (2026-01-16): Use UTC-aware datetime for database retention
+        # Database stores timestamps as UTC from Tradier API - naive datetime would use local time
+        # causing wrong records to be deleted (off by EDT/EST offset)
+        from datetime import datetime, timedelta, timezone
+        cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
         cutoff_str = cutoff.strftime('%Y-%m-%d %H:%M:%S')
 
         # Count records before cleanup

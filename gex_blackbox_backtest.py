@@ -21,7 +21,7 @@ Usage:
 import sys
 import sqlite3
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 
 sys.path.insert(0, '/root/gamma')
@@ -369,8 +369,10 @@ def main():
         end_date = sys.argv[3] + ' 23:59:59'
     else:
         # Default: Last 30 days
-        end_date = datetime.now().strftime('%Y-%m-%d 23:59:59')
-        start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d 00:00:00')
+        # BUGFIX (2026-01-16): Use UTC-aware datetime for backtest date ranges
+        # Database stores UTC timestamps - naive datetime would use local time causing wrong date queries
+        end_date = datetime.now(timezone.utc).strftime('%Y-%m-%d 23:59:59')
+        start_date = (datetime.now(timezone.utc) - timedelta(days=30)).strftime('%Y-%m-%d 00:00:00')
 
     # Run backtest
     run_backtest(index_symbol, start_date, end_date)

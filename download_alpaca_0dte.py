@@ -32,7 +32,7 @@ import sqlite3
 import argparse
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from alpaca.data.historical import OptionHistoricalDataClient
 from alpaca.data.requests import OptionBarsRequest
 from alpaca.data.timeframe import TimeFrame
@@ -61,12 +61,14 @@ class AlpacaDownloader:
         """Initialize Alpaca client."""
         self.client = OptionHistoricalDataClient(api_key, api_secret)
         self.checkpoint = self.load_checkpoint()
+        # BUGFIX (2026-01-16): Use UTC-aware datetime for performance tracking
+        # Ensures ETA calculations are timezone-consistent
         self.stats = {
             'dates_processed': 0,
             'symbols_downloaded': 0,
             'bars_stored': 0,
             'errors': 0,
-            'start_time': datetime.now()
+            'start_time': datetime.now(timezone.utc)
         }
 
     def load_checkpoint(self):
@@ -360,11 +362,12 @@ class AlpacaDownloader:
                 self.download_date(date, test_mode=test_mode)
 
                 # Show progress
-                elapsed = (datetime.now() - self.stats['start_time']).total_seconds()
+                # BUGFIX (2026-01-16): Use UTC-aware datetime for ETA calculation
+                elapsed = (datetime.now(timezone.utc) - self.stats['start_time']).total_seconds()
                 if i > 0:
                     avg_seconds_per_date = elapsed / (i + 1)
                     remaining_seconds = avg_seconds_per_date * (len(remaining_dates) - i - 1)
-                    eta = datetime.now() + timedelta(seconds=remaining_seconds)
+                    eta = datetime.now(timezone.utc) + timedelta(seconds=remaining_seconds)
                     print(f"\n⏱️  ETA: {eta.strftime('%Y-%m-%d %H:%M')} ({remaining_seconds/3600:.1f} hours)")
 
         except KeyboardInterrupt:

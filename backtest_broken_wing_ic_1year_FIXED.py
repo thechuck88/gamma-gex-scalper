@@ -17,7 +17,7 @@ This fixed version only analyzes the 39 truly closed trades.
 import sys
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 
 sys.path.insert(0, '/root/gamma')
@@ -66,7 +66,9 @@ print(f"   (Excluded {len(unclosed_trades)} unclosed trades - they're not resolv
 print()
 
 # Filter to last 1 year (approximately)
-one_year_ago = datetime.now() - timedelta(days=365)
+# BUGFIX (2026-01-16): Use UTC-aware datetime for backtest date filtering
+# Trades dataframe has timezone-aware timestamps - naive datetime causes comparison issues
+one_year_ago = datetime.now(timezone.utc) - timedelta(days=365)
 trades_past_year = trades_to_analyze[trades_to_analyze['Timestamp_ET'] > one_year_ago].copy()
 print(f"✅ Using {len(trades_past_year)} trades from past year ({trades_past_year['Timestamp_ET'].min().date()} to {trades_past_year['Timestamp_ET'].max().date()})")
 print()

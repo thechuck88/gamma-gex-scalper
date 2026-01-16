@@ -76,7 +76,7 @@ LOG_FILE_LIVE = f"{GAMMA_HOME}/data/monitor_live.log"
 # Monitor settings
 POLL_INTERVAL = 15              # Seconds between checks (tighter stop loss monitoring)
 PROFIT_TARGET_PCT = 0.50        # Close at 50% profit
-STOP_LOSS_PCT = 0.10            # CRITICAL FIX-2: Changed from 0.15 to 0.10 (matches scalper logs, better R:R)
+STOP_LOSS_PCT = 0.15            # OPTIMIZATION: 15% stop loss (allows breathing room for 0DTE gamma swings)
 AUTO_CLOSE_HOUR = 15            # Auto-close at 3:30 PM ET (was 3:50)
 AUTO_CLOSE_MINUTE = 30          # Earlier close avoids final 30-min chaos
 
@@ -88,7 +88,7 @@ TRAILING_DISTANCE_MIN = 0.08    # Minimum trail distance as profit rises (8%)
 TRAILING_TIGHTEN_RATE = 0.4     # How fast it tightens (0.4 = every 2.5% gain, trail tightens 1%)
 
 # Stop loss grace period - let positions settle before triggering SL
-SL_GRACE_PERIOD_SEC = 180       # OPTIMIZATION #2: 3 minutes grace (optimal from backtests) - faster exit from losers
+SL_GRACE_PERIOD_SEC = 540       # OPTIMIZATION #2: 9 minutes grace (allows 0DTE to work through initial gamma volatility)
 SL_EMERGENCY_PCT = 0.40         # Emergency stop - trigger immediately if loss exceeds 40%
 
 # Progressive hold-to-expiration settings (2026-01-10)
