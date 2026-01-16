@@ -65,6 +65,33 @@ def get_spx_price():
     return None
 
 
+def get_ndx_price():
+    """Fetch NDX price directly from Tradier LIVE API."""
+    try:
+        r = requests.get(f"{LIVE_URL}/markets/quotes", headers=LIVE_HEADERS,
+                        params={"symbols": "NDX"}, timeout=10)
+        data = r.json()
+        q = data.get("quotes", {}).get("quote")
+        if q:
+            price = q.get("last") or q.get("bid") or q.get("ask")
+            if price and float(price) > 1000:
+                return float(price)
+    except Exception as e:
+        pass
+    # Fallback to QQQ * 50 (approximate multiplier)
+    try:
+        r = requests.get(f"{LIVE_URL}/markets/quotes", headers=LIVE_HEADERS,
+                        params={"symbols": "QQQ"}, timeout=10)
+        data = r.json()
+        q = data.get("quotes", {}).get("quote")
+        if q:
+            qqq = float(q.get("last") or q.get("bid") or q.get("ask"))
+            return qqq * 50  # NDX is roughly 50x QQQ
+    except Exception as e:
+        pass
+    return None
+
+
 def get_vix():
     """Fetch VIX - try Tradier first, then yfinance."""
     # Try Tradier
@@ -90,8 +117,14 @@ def get_vix():
     return None
 
 
-def calculate_real_gex_pin(spx_price):
-    """Calculate real GEX pin from options open interest and gamma data."""
+def calculate_real_gex_pin(index_price, symbol="SPX", search_range=50):
+    """Calculate real GEX pin from options open interest and gamma data.
+
+    Args:
+        index_price: Current price of the underlying
+        symbol: Index symbol ("SPX" or "NDX")
+        search_range: How many points around current price to search for pin
+    """
     from datetime import date
 
     try:
@@ -99,7 +132,7 @@ def calculate_real_gex_pin(spx_price):
 
         # Get options chain with greeks
         r = requests.get(f"{LIVE_URL}/markets/options/chains", headers=LIVE_HEADERS,
-            params={"symbol": "SPX", "expiration": today, "greeks": "true"}, timeout=15)
+            params={"symbol": symbol, "expiration": today, "greeks": "true"}, timeout=15)
 
         if r.status_code != 200:
             return None
@@ -125,7 +158,7 @@ def calculate_real_gex_pin(spx_price):
             if oi == 0 or gamma == 0:
                 continue
 
-            gex = gamma * oi * 100 * (spx_price ** 2)
+            gex = gamma * oi * 100 * (index_price ** 2)
 
             if opt_type == 'call':
                 gex_by_strike[strike] += gex
@@ -136,13 +169,13 @@ def calculate_real_gex_pin(spx_price):
             return None
 
         # Find strikes near current price with highest positive GEX
-        near_strikes = [(s, g) for s, g in gex_by_strike.items() if abs(s - spx_price) < 50 and g > 0]
+        near_strikes = [(s, g) for s, g in gex_by_strike.items() if abs(s - index_price) < search_range and g > 0]
 
         if near_strikes:
             pin_strike, _ = max(near_strikes, key=lambda x: x[1])
             return pin_strike
         else:
-            all_near = [(s, g) for s, g in gex_by_strike.items() if abs(s - spx_price) < 50]
+            all_near = [(s, g) for s, g in gex_by_strike.items() if abs(s - index_price) < search_range]
             if all_near:
                 pin_strike, _ = max(all_near, key=lambda x: abs(x[1]))
                 return pin_strike
@@ -153,18 +186,19 @@ def calculate_real_gex_pin(spx_price):
         return None
 
 
-def get_gex_pin(spx_price, cache_duration_sec=1800):
+def get_gex_pin(index_price, symbol="SPX", cache_duration_sec=1800):
     """Get GEX pin level - cached to file to avoid flip-flopping.
 
     Args:
-        spx_price: Current SPX price
+        index_price: Current index price (SPX or NDX)
+        symbol: Index symbol ("SPX" or "NDX")
         cache_duration_sec: Cache validity duration in seconds (default 1800 = 30 min)
                            Set to 0 to disable caching (always recalculate)
     """
     import time
     import json
 
-    CACHE_FILE = '/tmp/gex_pin_cache.json'
+    CACHE_FILE = f'/tmp/gex_pin_cache_{symbol.lower()}.json'
 
     now = time.time()
 
@@ -179,7 +213,9 @@ def get_gex_pin(spx_price, cache_duration_sec=1800):
             pass
 
     # Calculate real GEX pin from options data
-    pin = calculate_real_gex_pin(spx_price)
+    # Use appropriate search range: SPX uses 50 pts, NDX uses 200 pts (higher priced)
+    search_range = 200 if symbol == "NDX" else 50
+    pin = calculate_real_gex_pin(index_price, symbol=symbol, search_range=search_range)
 
     if pin is None:
         return None  # No fallback - return None if GEX unavailable
@@ -194,31 +230,46 @@ def get_gex_pin(spx_price, cache_duration_sec=1800):
     return pin
 
 
-def get_intraday_prices():
-    """Fetch intraday SPY prices for sparkline chart."""
+def get_intraday_prices(symbol="SPY", multiplier=10):
+    """Fetch intraday prices for sparkline chart.
+
+    Args:
+        symbol: ETF to fetch ("SPY" for SPX, "QQQ" for NDX)
+        multiplier: Multiplier to convert ETF to index (10 for SPX, 50 for NDX)
+    """
     try:
         # Get today's 5-min bars (suppress warnings)
         import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            spy = yf.download("SPY", period="1d", interval="5m", progress=False)
-        if spy.empty:
+            data = yf.download(symbol, period="1d", interval="5m", progress=False)
+        if data.empty:
             return []
-        # Convert to SPX and return as list
-        closes = spy['Close'].values
+        # Convert to index and return as list
+        closes = data['Close'].values
         # Handle nested array from yfinance
         if hasattr(closes[0], '__iter__'):
             closes = [float(c[0]) for c in closes]
         else:
             closes = [float(c) for c in closes]
-        # Convert SPY to SPX (multiply by 10)
-        return [round(p * 10) for p in closes]
+        # Convert ETF to index
+        return [round(p * multiplier) for p in closes]
     except Exception as e:
         return []
 
 
-def render_sparkline(prices, width=50, height=5, gex_pin=None, min_p=None, max_p=None):
-    """Render a compact ASCII sparkline chart with time vertical, price horizontal."""
+def render_sparkline(prices, width=50, height=5, gex_pin=None, min_p=None, max_p=None, far_threshold=10):
+    """Render a compact ASCII sparkline chart with time vertical, price horizontal.
+
+    Args:
+        prices: List of prices to plot
+        width: Chart width in characters
+        height: Number of time points to show
+        gex_pin: GEX pin level to mark on chart
+        min_p: Min price for chart range (calculated if None)
+        max_p: Max price for chart range (calculated if None)
+        far_threshold: Distance from pin to color red (10 for SPX, 40 for NDX)
+    """
     if not prices or len(prices) < 2:
         return []
 
@@ -249,7 +300,7 @@ def render_sparkline(prices, width=50, height=5, gex_pin=None, min_p=None, max_p
             if x == pos:
                 if is_last:
                     line += "\033[33m●\033[0m"  # Yellow dot for current
-                elif price > gex_pin + 10 or price < gex_pin - 10:
+                elif price > gex_pin + far_threshold or price < gex_pin - far_threshold:
                     line += "\033[31m●\033[0m"  # Red when far from pin
                 else:
                     line += "\033[32m●\033[0m"  # Green when near pin
@@ -263,23 +314,10 @@ def render_sparkline(prices, width=50, height=5, gex_pin=None, min_p=None, max_p
 
 
 def show_market_banner():
-    """Display current market data banner."""
+    """Display current market data banner with both SPX and NDX charts."""
     spx_raw = get_spx_price()
+    ndx_raw = get_ndx_price()
     vix = get_vix()
-
-    if spx_raw:
-        spx = round(spx_raw)
-        gex_pin = get_gex_pin(spx)
-        distance = (spx - gex_pin) if gex_pin else None
-
-        # Calculate expected move
-        if vix:
-            hours_left = 2
-            expected_move = spx * (vix/100) * math.sqrt(hours_left / (252 * 6.5))
-        else:
-            expected_move = 0
-    else:
-        spx, gex_pin, distance, expected_move = 0, None, None, 0
 
     now_et = datetime.now(ET)
 
@@ -287,19 +325,26 @@ def show_market_banner():
     print(f"  GAMMA SCALPER STATUS — {now_et.strftime('%Y-%m-%d %H:%M:%S')} ET")
     print(f"{'='*70}")
 
-    if spx_raw and vix:
+    # Display SPX chart
+    if spx_raw:
+        spx = round(spx_raw)
+        gex_pin_spx = get_gex_pin(spx, symbol="SPX")
+        distance_spx = (spx - gex_pin_spx) if gex_pin_spx else None
+
+        print(f"\n  SPX CHART (SPY-based):")
+
         # Get intraday prices for sparkline
-        prices = get_intraday_prices()
-        if prices and gex_pin:
-            chart_prices = prices[-5:]  # Last 5 data points for compact view
+        prices_spx = get_intraday_prices(symbol="SPY", multiplier=10)
+        if prices_spx and gex_pin_spx:
+            chart_prices = prices_spx[-5:]  # Last 5 data points for compact view
             # Include GEX pin in range so it's always visible
-            min_p = min(min(chart_prices), gex_pin - 5)
-            max_p = max(max(chart_prices), gex_pin + 5)
-            sparkline = render_sparkline(prices, width=50, height=5, gex_pin=gex_pin, min_p=min_p, max_p=max_p)
+            min_p = min(min(chart_prices), gex_pin_spx - 5)
+            max_p = max(max(chart_prices), gex_pin_spx + 5)
+            sparkline = render_sparkline(prices_spx, width=50, height=5, gex_pin=gex_pin_spx, min_p=min_p, max_p=max_p, far_threshold=10)
 
             # Calculate pin position for header (match chart width of 50)
             price_range = max_p - min_p
-            pin_pos = int((gex_pin - min_p) / price_range * 49) if price_range > 0 else 24
+            pin_pos = int((gex_pin_spx - min_p) / price_range * 49) if price_range > 0 else 24
 
             # Print header with price range and pin marker (build exact 50-char string)
             header_line = " " * pin_pos + "▼" + " " * (49 - pin_pos)
@@ -313,20 +358,75 @@ def show_market_banner():
                 else:
                     print(f"        |{row}|")
 
-        # Display market data line
-        if gex_pin and distance is not None:
-            # Color distance based on magnitude
-            if abs(distance) <= 10:
+        # Display SPX data line
+        if gex_pin_spx and distance_spx is not None:
+            # Color distance based on magnitude (SPX: 10/25 pts)
+            if abs(distance_spx) <= 10:
                 dist_color = "\033[32m"  # Green - near pin
-            elif abs(distance) <= 25:
+            elif abs(distance_spx) <= 25:
                 dist_color = "\033[33m"  # Yellow - moderate
             else:
                 dist_color = "\033[31m"  # Red - far from pin
-            print(f"  SPX: {spx}  |  GEX Pin: {int(gex_pin)}  |  Distance: {dist_color}{int(distance):+d}\033[0m  |  VIX: {vix:.2f}")
+            print(f"  SPX: {spx}  |  GEX Pin: {int(gex_pin_spx)}  |  Distance: {dist_color}{int(distance_spx):+d}\033[0m")
         else:
-            print(f"  SPX: {spx}  |  GEX Pin: \033[31mUNAVAILABLE\033[0m  |  VIX: {vix:.2f}")
-        print(f"  Expected 2hr Move: ±{expected_move:.1f} pts (1σ)")
-    else:
+            print(f"  SPX: {spx}  |  GEX Pin: \033[31mUNAVAILABLE\033[0m")
+
+    # Display NDX chart
+    if ndx_raw:
+        ndx = round(ndx_raw)
+        gex_pin_ndx = get_gex_pin(ndx, symbol="NDX")
+        distance_ndx = (ndx - gex_pin_ndx) if gex_pin_ndx else None
+
+        print(f"\n  NDX CHART (QQQ-based):")
+
+        # Get intraday prices for sparkline
+        prices_ndx = get_intraday_prices(symbol="QQQ", multiplier=50)
+        if prices_ndx and gex_pin_ndx:
+            chart_prices = prices_ndx[-5:]  # Last 5 data points for compact view
+            # Include GEX pin in range so it's always visible
+            min_p = min(min(chart_prices), gex_pin_ndx - 20)
+            max_p = max(max(chart_prices), gex_pin_ndx + 20)
+            sparkline = render_sparkline(prices_ndx, width=50, height=5, gex_pin=gex_pin_ndx, min_p=min_p, max_p=max_p, far_threshold=40)
+
+            # Calculate pin position for header (match chart width of 50)
+            price_range = max_p - min_p
+            pin_pos = int((gex_pin_ndx - min_p) / price_range * 49) if price_range > 0 else 24
+
+            # Print header with price range and pin marker (build exact 50-char string)
+            header_line = " " * pin_pos + "▼" + " " * (49 - pin_pos)
+            print(f"        {min_p:<6}{' '*18}PIN{' '*18}{max_p:>6}")
+            print(f"        |{header_line}|")
+
+            # Print sparkline rows (time going down)
+            for i, row in enumerate(sparkline):
+                if i == len(sparkline) - 1:
+                    print(f"  NOW → |{row}| ●={ndx}")
+                else:
+                    print(f"        |{row}|")
+
+        # Display NDX data line
+        if gex_pin_ndx and distance_ndx is not None:
+            # Color distance based on magnitude (NDX: 40/100 pts - scaled for higher price)
+            if abs(distance_ndx) <= 40:
+                dist_color = "\033[32m"  # Green - near pin
+            elif abs(distance_ndx) <= 100:
+                dist_color = "\033[33m"  # Yellow - moderate
+            else:
+                dist_color = "\033[31m"  # Red - far from pin
+            print(f"  NDX: {ndx}  |  GEX Pin: {int(gex_pin_ndx)}  |  Distance: {dist_color}{int(distance_ndx):+d}\033[0m")
+        else:
+            print(f"  NDX: {ndx}  |  GEX Pin: \033[31mUNAVAILABLE\033[0m")
+
+    # Display VIX and expected moves for both indices
+    if vix and spx_raw and ndx_raw:
+        hours_left = 2
+        expected_move_spx = spx * (vix/100) * math.sqrt(hours_left / (252 * 6.5))
+        expected_move_ndx = ndx * (vix/100) * math.sqrt(hours_left / (252 * 6.5))
+        print(f"\n  VIX: {vix:.2f}  |  Expected 2hr Move: ±{expected_move_spx:.1f} pts (SPX), ±{expected_move_ndx:.1f} pts (NDX)")
+    elif vix:
+        print(f"\n  VIX: {vix:.2f}")
+
+    if not spx_raw and not ndx_raw:
         print(f"  Market data unavailable")
 
 def get_positions(account_id, api_key, base_url):
@@ -399,12 +499,12 @@ def parse_date_acquired(date_acquired):
         return date_acquired[:16], date_acquired[:16]
 
 def format_pl(pl):
-    """Format P/L with color."""
+    """Format P/L with color (12 visible chars to match P/L column width)."""
     if pl > 0:
-        return f"\033[32m${pl:>+8.2f}\033[0m"  # Green
+        return f"\033[32m${pl:>+11.2f}\033[0m"  # Green ($ + 11 chars = 12 total)
     elif pl < 0:
-        return f"\033[31m${pl:>+8.2f}\033[0m"  # Red
-    return f"${pl:>+8.2f}"
+        return f"\033[31m${pl:>+11.2f}\033[0m"  # Red ($ + 11 chars = 12 total)
+    return f"${pl:>+11.2f}"  # 12 visible chars ($ + 11 for number with sign)
 
 def load_orders(name):
     """Load tracked orders from JSON file."""
