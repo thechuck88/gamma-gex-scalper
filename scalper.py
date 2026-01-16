@@ -27,6 +27,9 @@ import pandas as pd
 from datetime import date
 from decision_logger import DecisionLogger
 
+# ==================== AUTOSCALING ====================
+from autoscaling import calculate_position_size, get_max_risk_for_strategy
+
 # ==================== CONFIG ====================
 from config import (PAPER_ACCOUNT_ID, LIVE_ACCOUNT_ID, TRADIER_LIVE_KEY, TRADIER_SANDBOX_KEY,
                     DISCORD_ENABLED, DISCORD_WEBHOOK_LIVE_URL, DISCORD_WEBHOOK_PAPER_URL,
@@ -1776,9 +1779,17 @@ try:
 
     log(f"Position limit check passed: {active_positions}/{MAX_DAILY_POSITIONS} positions")
 
-    # === CALCULATE POSITION SIZE (AUTOSCALING) ===
-    account_balance, trade_stats = load_account_balance()
-    position_size = calculate_position_size_kelly(account_balance, trade_stats)
+    # === CALCULATE POSITION SIZE (AUTOSCALING WITH HALF-KELLY) ===
+    # Calculate max risk per contract based on strategy type
+    max_risk = get_max_risk_for_strategy(setup['strategy'], expected_credit)
+    log(f"Max risk per contract: ${max_risk:.0f}")
+
+    # Calculate position size using Half-Kelly formula
+    position_size = calculate_position_size(
+        max_risk_per_contract=max_risk,
+        mode=mode,
+        verbose=True  # Print autoscaling details to log
+    )
 
     if position_size == 0:
         log(f"⚠️  ZERO position size calculated - account below safety threshold")
