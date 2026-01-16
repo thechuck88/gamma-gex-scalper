@@ -175,9 +175,16 @@ def backtest_with_blackbox():
     
     for snapshot in snapshots:
         timestamp, date_et, time_et, symbol, underlying, vix, pin_strike, gex, distance, competing = snapshot
-        
+
         # Apply filters
         hour = int(time_et.split(':')[0])
+        minute = int(time_et.split(':')[1])
+        entry_time = f"{hour:02d}:{minute:02d}"
+
+        # CRITICAL: Only trade at scheduled entry times!
+        if entry_time not in ENTRY_TIMES_ET:
+            continue
+
         if hour >= CUTOFF_HOUR:  # After 1 PM ET
             continue
         if vix >= VIX_MAX_THRESHOLD or vix < VIX_FLOOR:
@@ -217,22 +224,35 @@ def backtest_with_blackbox():
     return trades
 
 
-def print_report(trades):
+def print_report(trades, show_details=True):
     """Print comprehensive backtest report."""
-    
+
     print("\n" + "="*100)
     print("GEX BACKTEST: Blackbox Data with Canonical Position Management")
     print("="*100)
-    
+
     print(f"\nDatabase: {DB_PATH} (UTC→ET converted)")
     print(f"Period: 2026-01-12 to 2026-01-13 (2 trading days)")
     print(f"Entry times: {', '.join(ENTRY_TIMES_ET)}")
     print(f"Cutoff: Before {CUTOFF_HOUR}:00 ET")
     print(f"VIX range: {VIX_FLOOR}-{VIX_MAX_THRESHOLD}")
-    
+
     if not trades:
         print("\nNo trades matched criteria.")
         return
+
+    # Individual trade details
+    if show_details:
+        print(f"\n" + "-"*100)
+        print("INDIVIDUAL TRADES")
+        print("-"*100)
+        print(f"{'Date':<12} {'Time':<10} {'PIN':<10} {'Under':<10} {'VIX':<8} {'Entry':<8} {'Exit':<10} {'P/L':<10} {'Result':<15}")
+        print("-"*100)
+        for t in trades:
+            result = 'WIN' if t['winner'] else 'LOSS'
+            print(f"{t['date']:<12} {t['time']:<10} {t['pin_strike']:<10.0f} {t['underlying']:<10.2f} {t['vix']:<8.1f} "
+                  f"${t['entry_credit']:<7.2f} {t['exit_reason']:<10} ${t['pl']:<9.0f} {result:<15}")
+        print("-"*100)
     
     # Calculate statistics
     winners = [t for t in trades if t['winner']]

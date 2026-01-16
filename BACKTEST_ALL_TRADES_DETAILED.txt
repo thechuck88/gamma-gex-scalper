@@ -1,0 +1,1216 @@
+
+========================================================================================================================
+GEX + OTM BACKTEST: Complete Strategy Test
+========================================================================================================================
+
+Database: /root/gamma/data/gex_blackbox.db
+Period: Jan 14-16, 2026 (3 trading days)
+Entry times: 09:36, 10:00, 10:30, 11:00, 11:30, 12:00, 12:30, 13:00
+
+========================================================================================================================
+OVERALL RESULTS
+========================================================================================================================
+Total trades: 88 (62 GEX, 26 OTM)
+Winners: 71 (80.7%)
+Losers: 17 (19.3%)
+Total P&L: $1,272
+Avg P/L/trade: $14
+
+------------------------------------------------------------------------------------------------------------------------
+GEX PIN SPREAD PERFORMANCE
+------------------------------------------------------------------------------------------------------------------------
+Trades: 62
+Win Rate: 74.2%
+Total P&L: $172
+Avg P/L: $3
+Avg Winner: $24
+Avg Loser: $-59
+
+------------------------------------------------------------------------------------------------------------------------
+OTM IRON CONDOR PERFORMANCE
+------------------------------------------------------------------------------------------------------------------------
+Trades: 26
+Win Rate: 96.2%
+Total P&L: $1,100
+Avg P/L: $42
+Avg Winner: $48
+Avg Loser: $-107
+
+------------------------------------------------------------------------------------------------------------------------
+SAMPLE TRADES (First 20)
+------------------------------------------------------------------------------------------------------------------------
+Strategy             Date         Time     Strikes                             Entry   Exit    P/L      Result
+------------------------------------------------------------------------------------------------------------------------
+GEX PIN              2026-01-14   09:36:01 6975                                $2.50   $2.21   $29      WIN
+OTM IRON CONDOR      2026-01-14   09:36:01 C:6995/7005 P:6885/6875             $1.45   $0.74   $71      WIN
+GEX PIN              2026-01-14   09:36:28 6975                                $2.50   $2.42   $8       WIN
+OTM IRON CONDOR      2026-01-14   09:36:28 C:6990/7000 P:6885/6875             $1.60   $0.83   $77      WIN
+GEX PIN              2026-01-14   09:36:32 6975                                $2.50   $2.35   $15      WIN
+OTM IRON CONDOR      2026-01-14   09:36:32 C:6990/7000 P:6885/6875             $1.65   $0.88   $77      WIN
+GEX PIN              2026-01-14   10:00:03 6975                                $2.50   $2.41   $9       WIN
+OTM IRON CONDOR      2026-01-14   10:00:03 C:6965/6975 P:6860/6850             $2.75   $1.46   $129     WIN
+GEX PIN              2026-01-14   10:00:06 6975                                $2.50   $2.37   $13      WIN
+OTM IRON CONDOR      2026-01-14   10:00:06 C:6965/6975 P:6860/6850             $2.95   $1.56   $139     WIN
+GEX PIN              2026-01-14   10:00:34 6975                                $2.50   $2.21   $29      WIN
+OTM IRON CONDOR      2026-01-14   10:00:34 C:6960/6970 P:6860/6850             $1.65   $0.87   $78      WIN
+GEX PIN              2026-01-14   10:30:14 6975                                $2.50   $2.25   $25      WIN
+OTM IRON CONDOR      2026-01-14   10:30:14 C:6960/6970 P:6860/6850             $0.95   $0.51   $44      WIN
+GEX PIN              2026-01-14   10:30:21 6975                                $2.50   $2.40   $10      WIN
+OTM IRON CONDOR      2026-01-14   10:30:21 C:6960/6970 P:6860/6850             $1.00   $2.07   $-107    LOSS
+GEX PIN              2026-01-14   10:30:52 6975                                $2.50   $2.26   $24      WIN
+OTM IRON CONDOR      2026-01-14   10:30:52 C:6960/6970 P:6860/6850             $1.00   $0.55   $45      WIN
+GEX PIN              2026-01-14   11:00:07 6975                                $2.50   $2.28   $22      WIN
+OTM IRON CONDOR      2026-01-14   11:00:07 C:6945/6955 P:6850/6840             $0.90   $0.48   $42      WIN
+... 68 more trades ...
+========================================================================================================================
+
+✓ Report saved to: /root/gamma/BACKTEST_GEX_AND_OTM.txt
+
+ALL 88 TRADES - COMPLETE DETAILS
+================================================================================================================================================================
+
+Trade #1:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 09:36:01
+  Underlying:    SPX @ $6939.45
+  VIX:           16.36
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.21
+  P/L:           $+29.00
+  Duration:      26 minutes
+  Exit Reason:   Trailing Stop (17%)
+  Result:        WIN ✓
+
+Trade #2:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 09:36:01
+  Underlying:    SPX @ $6939.45
+  VIX:           16.36
+  Strikes:       C:6995/7005 P:6885/6875
+  Entry Credit:  $1.45
+  Exit Credit:   $0.74
+  P/L:           $+71.00
+  Duration:      109 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 54%)
+  Result:        WIN ✓
+
+Trade #3:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 09:36:28
+  Underlying:    SPX @ $6937.04
+  VIX:           16.40
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.42
+  P/L:           $+8.00
+  Duration:      19 minutes
+  Exit Reason:   Trailing Stop (12%)
+  Result:        WIN ✓
+
+Trade #4:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 09:36:28
+  Underlying:    SPX @ $6937.04
+  VIX:           16.40
+  Strikes:       C:6990/7000 P:6885/6875
+  Entry Credit:  $1.60
+  Exit Credit:   $0.83
+  P/L:           $+77.00
+  Duration:      106 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 51%)
+  Result:        WIN ✓
+
+Trade #5:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 09:36:32
+  Underlying:    SPX @ $6937.04
+  VIX:           16.40
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.35
+  P/L:           $+15.00
+  Duration:      25 minutes
+  Exit Reason:   Trailing Stop (14%)
+  Result:        WIN ✓
+
+Trade #6:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 09:36:32
+  Underlying:    SPX @ $6937.04
+  VIX:           16.40
+  Strikes:       C:6990/7000 P:6885/6875
+  Entry Credit:  $1.65
+  Exit Credit:   $0.88
+  P/L:           $+77.00
+  Duration:      108 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 50%)
+  Result:        WIN ✓
+
+Trade #7:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 10:00:03
+  Underlying:    SPX @ $6913.55
+  VIX:           16.68
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.41
+  P/L:           $+9.00
+  Duration:      12 minutes
+  Exit Reason:   Trailing Stop (13%)
+  Result:        WIN ✓
+
+Trade #8:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 10:00:03
+  Underlying:    SPX @ $6913.55
+  VIX:           16.68
+  Strikes:       C:6965/6975 P:6860/6850
+  Entry Credit:  $2.75
+  Exit Credit:   $1.46
+  P/L:           $+129.00
+  Duration:      106 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 51%)
+  Result:        WIN ✓
+
+Trade #9:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 10:00:06
+  Underlying:    SPX @ $6913.55
+  VIX:           16.68
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.37
+  P/L:           $+13.00
+  Duration:      42 minutes
+  Exit Reason:   Trailing Stop (12%)
+  Result:        WIN ✓
+
+Trade #10:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 10:00:06
+  Underlying:    SPX @ $6913.55
+  VIX:           16.68
+  Strikes:       C:6965/6975 P:6860/6850
+  Entry Credit:  $2.95
+  Exit Credit:   $1.56
+  P/L:           $+139.00
+  Duration:      109 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 51%)
+  Result:        WIN ✓
+
+Trade #11:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 10:00:34
+  Underlying:    SPX @ $6910.14
+  VIX:           16.69
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.21
+  P/L:           $+29.00
+  Duration:      34 minutes
+  Exit Reason:   Trailing Stop (14%)
+  Result:        WIN ✓
+
+Trade #12:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 10:00:34
+  Underlying:    SPX @ $6910.14
+  VIX:           16.69
+  Strikes:       C:6960/6970 P:6860/6850
+  Entry Credit:  $1.65
+  Exit Credit:   $0.87
+  P/L:           $+78.00
+  Duration:      111 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 50%)
+  Result:        WIN ✓
+
+Trade #13:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 10:30:14
+  Underlying:    SPX @ $6911.04
+  VIX:           16.67
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.25
+  P/L:           $+25.00
+  Duration:      36 minutes
+  Exit Reason:   Trailing Stop (13%)
+  Result:        WIN ✓
+
+Trade #14:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 10:30:14
+  Underlying:    SPX @ $6911.04
+  VIX:           16.67
+  Strikes:       C:6960/6970 P:6860/6850
+  Entry Credit:  $0.95
+  Exit Credit:   $0.51
+  P/L:           $+44.00
+  Duration:      108 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 51%)
+  Result:        WIN ✓
+
+Trade #15:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 10:30:21
+  Underlying:    SPX @ $6911.04
+  VIX:           16.67
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.40
+  P/L:           $+10.00
+  Duration:      24 minutes
+  Exit Reason:   Trailing Stop (12%)
+  Result:        WIN ✓
+
+Trade #16:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 10:30:21
+  Underlying:    SPX @ $6911.04
+  VIX:           16.67
+  Strikes:       C:6960/6970 P:6860/6850
+  Entry Credit:  $1.00
+  Exit Credit:   $2.07
+  P/L:           $-107.00
+  Duration:      4 minutes
+  Exit Reason:   EMERGENCY Stop Loss (-107%)
+  Result:        LOSS ✗
+
+Trade #17:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 10:30:52
+  Underlying:    SPX @ $6909.04
+  VIX:           16.68
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.26
+  P/L:           $+24.00
+  Duration:      36 minutes
+  Exit Reason:   Trailing Stop (13%)
+  Result:        WIN ✓
+
+Trade #18:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 10:30:52
+  Underlying:    SPX @ $6909.04
+  VIX:           16.68
+  Strikes:       C:6960/6970 P:6860/6850
+  Entry Credit:  $1.00
+  Exit Credit:   $0.55
+  P/L:           $+45.00
+  Duration:      103 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 51%)
+  Result:        WIN ✓
+
+Trade #19:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 11:00:07
+  Underlying:    SPX @ $6897.59
+  VIX:           16.68
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.28
+  P/L:           $+22.00
+  Duration:      23 minutes
+  Exit Reason:   Trailing Stop (12%)
+  Result:        WIN ✓
+
+Trade #20:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 11:00:07
+  Underlying:    SPX @ $6897.59
+  VIX:           16.68
+  Strikes:       C:6945/6955 P:6850/6840
+  Entry Credit:  $0.90
+  Exit Credit:   $0.48
+  P/L:           $+42.00
+  Duration:      105 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 51%)
+  Result:        WIN ✓
+
+Trade #21:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 11:00:23
+  Underlying:    SPX @ $6897.89
+  VIX:           16.68
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.21
+  P/L:           $+29.00
+  Duration:      35 minutes
+  Exit Reason:   Trailing Stop (15%)
+  Result:        WIN ✓
+
+Trade #22:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 11:00:23
+  Underlying:    SPX @ $6897.89
+  VIX:           16.68
+  Strikes:       C:6945/6955 P:6850/6840
+  Entry Credit:  $0.90
+  Exit Credit:   $0.49
+  P/L:           $+41.00
+  Duration:      107 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 51%)
+  Result:        WIN ✓
+
+Trade #23:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 11:00:39
+  Underlying:    SPX @ $6897.39
+  VIX:           16.68
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.19
+  P/L:           $+31.00
+  Duration:      33 minutes
+  Exit Reason:   Trailing Stop (17%)
+  Result:        WIN ✓
+
+Trade #24:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 11:00:39
+  Underlying:    SPX @ $6897.39
+  VIX:           16.68
+  Strikes:       C:6945/6955 P:6850/6840
+  Entry Credit:  $0.90
+  Exit Credit:   $0.52
+  P/L:           $+38.00
+  Duration:      98 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 50%)
+  Result:        WIN ✓
+
+Trade #25:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 11:30:27
+  Underlying:    SPX @ $6919.07
+  VIX:           16.49
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.25
+  P/L:           $+25.00
+  Duration:      34 minutes
+  Exit Reason:   Trailing Stop (12%)
+  Result:        WIN ✓
+
+Trade #26:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 11:30:27
+  Underlying:    SPX @ $6919.07
+  VIX:           16.49
+  Strikes:       C:6965/6975 P:6875/6865
+  Entry Credit:  $0.50
+  Exit Credit:   $0.27
+  P/L:           $+23.00
+  Duration:      103 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 50%)
+  Result:        WIN ✓
+
+Trade #27:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 11:30:31
+  Underlying:    SPX @ $6920.08
+  VIX:           16.45
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.25
+  P/L:           $+25.00
+  Duration:      19 minutes
+  Exit Reason:   Trailing Stop (12%)
+  Result:        WIN ✓
+
+Trade #28:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 11:30:31
+  Underlying:    SPX @ $6920.08
+  VIX:           16.45
+  Strikes:       C:6965/6975 P:6875/6865
+  Entry Credit:  $0.55
+  Exit Credit:   $0.29
+  P/L:           $+26.00
+  Duration:      106 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 51%)
+  Result:        WIN ✓
+
+Trade #29:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 11:30:58
+  Underlying:    SPX @ $6919.78
+  VIX:           16.44
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.34
+  P/L:           $+16.00
+  Duration:      31 minutes
+  Exit Reason:   Trailing Stop (14%)
+  Result:        WIN ✓
+
+Trade #30:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 11:30:58
+  Underlying:    SPX @ $6919.78
+  VIX:           16.44
+  Strikes:       C:6965/6975 P:6875/6865
+  Entry Credit:  $0.55
+  Exit Credit:   $0.30
+  P/L:           $+25.00
+  Duration:      104 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 51%)
+  Result:        WIN ✓
+
+Trade #31:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 12:00:08
+  Underlying:    SPX @ $6890.47
+  VIX:           16.70
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.40
+  P/L:           $+10.00
+  Duration:      22 minutes
+  Exit Reason:   Trailing Stop (18%)
+  Result:        WIN ✓
+
+Trade #32:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 12:00:08
+  Underlying:    SPX @ $6890.47
+  VIX:           16.70
+  Strikes:       C:6935/6945 P:6850/6840
+  Entry Credit:  $0.95
+  Exit Credit:   $0.52
+  P/L:           $+43.00
+  Duration:      105 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 51%)
+  Result:        WIN ✓
+
+Trade #33:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 12:00:16
+  Underlying:    SPX @ $6890.47
+  VIX:           16.70
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.26
+  P/L:           $+24.00
+  Duration:      34 minutes
+  Exit Reason:   Trailing Stop (12%)
+  Result:        WIN ✓
+
+Trade #34:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 12:00:16
+  Underlying:    SPX @ $6890.47
+  VIX:           16.70
+  Strikes:       C:6935/6945 P:6850/6840
+  Entry Credit:  $0.85
+  Exit Credit:   $0.46
+  P/L:           $+39.00
+  Duration:      109 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 51%)
+  Result:        WIN ✓
+
+Trade #35:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 12:00:47
+  Underlying:    SPX @ $6890.47
+  VIX:           16.73
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.31
+  P/L:           $+19.00
+  Duration:      29 minutes
+  Exit Reason:   Trailing Stop (12%)
+  Result:        WIN ✓
+
+Trade #36:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 12:00:47
+  Underlying:    SPX @ $6890.47
+  VIX:           16.73
+  Strikes:       C:6935/6945 P:6850/6840
+  Entry Credit:  $0.85
+  Exit Credit:   $0.43
+  P/L:           $+42.00
+  Duration:      109 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 51%)
+  Result:        WIN ✓
+
+Trade #37:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 12:30:04
+  Underlying:    SPX @ $6895.89
+  VIX:           16.53
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.26
+  P/L:           $+24.00
+  Duration:      20 minutes
+  Exit Reason:   Trailing Stop (20%)
+  Result:        WIN ✓
+
+Trade #38:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 12:30:04
+  Underlying:    SPX @ $6895.89
+  VIX:           16.53
+  Strikes:       C:6935/6945 P:6855/6845
+  Entry Credit:  $0.55
+  Exit Credit:   $0.30
+  P/L:           $+25.00
+  Duration:      102 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 51%)
+  Result:        WIN ✓
+
+Trade #39:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 12:30:16
+  Underlying:    SPX @ $6895.89
+  VIX:           16.53
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.30
+  P/L:           $+20.00
+  Duration:      26 minutes
+  Exit Reason:   Trailing Stop (16%)
+  Result:        WIN ✓
+
+Trade #40:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 12:30:16
+  Underlying:    SPX @ $6895.89
+  VIX:           16.53
+  Strikes:       C:6935/6945 P:6855/6845
+  Entry Credit:  $0.60
+  Exit Credit:   $0.33
+  P/L:           $+27.00
+  Duration:      104 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 50%)
+  Result:        WIN ✓
+
+Trade #41:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-14 12:30:36
+  Underlying:    SPX @ $6893.28
+  VIX:           16.57
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.21
+  P/L:           $+29.00
+  Duration:      34 minutes
+  Exit Reason:   Trailing Stop (14%)
+  Result:        WIN ✓
+
+Trade #42:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-14 12:30:36
+  Underlying:    SPX @ $6893.28
+  VIX:           16.57
+  Strikes:       C:6935/6945 P:6855/6845
+  Entry Credit:  $0.65
+  Exit Credit:   $0.34
+  P/L:           $+31.00
+  Duration:      106 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 51%)
+  Result:        WIN ✓
+
+Trade #43:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 09:36:14
+  Underlying:    SPX @ $6965.43
+  VIX:           16.19
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.57
+  P/L:           $-7.00
+  Duration:      12 minutes
+  Exit Reason:   Trailing Stop (13%)
+  Result:        LOSS ✗
+
+Trade #44:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 09:36:18
+  Underlying:    SPX @ $6965.43
+  VIX:           16.19
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.38
+  P/L:           $+12.00
+  Duration:      9 minutes
+  Exit Reason:   Trailing Stop (12%)
+  Result:        WIN ✓
+
+Trade #45:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 09:36:49
+  Underlying:    SPX @ $6963.22
+  VIX:           16.22
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $3.00
+  P/L:           $-50.00
+  Duration:      18 minutes
+  Exit Reason:   Stop Loss (-20%)
+  Result:        LOSS ✗
+
+Trade #46:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 10:00:16
+  Underlying:    SPX @ $6961.52
+  VIX:           16.19
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.89
+  P/L:           $-39.00
+  Duration:      13 minutes
+  Exit Reason:   Stop Loss (-16%)
+  Result:        LOSS ✗
+
+Trade #47:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 10:00:21
+  Underlying:    SPX @ $6959.31
+  VIX:           16.20
+  Strikes:       6960
+  Entry Credit:  $2.50
+  Exit Credit:   $1.87
+  P/L:           $+63.00
+  Duration:      2 minutes
+  Exit Reason:   Trailing Stop (37%)
+  Result:        WIN ✓
+
+Trade #48:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 10:00:48
+  Underlying:    SPX @ $6960.91
+  VIX:           16.20
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.21
+  P/L:           $+29.00
+  Duration:      6 minutes
+  Exit Reason:   Trailing Stop (12%)
+  Result:        WIN ✓
+
+Trade #49:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 10:30:00
+  Underlying:    SPX @ $6962.12
+  VIX:           16.22
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $3.13
+  P/L:           $-63.00
+  Duration:      10 minutes
+  Exit Reason:   Stop Loss (-25%)
+  Result:        LOSS ✗
+
+Trade #50:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 10:30:29
+  Underlying:    SPX @ $6963.02
+  VIX:           16.22
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.33
+  P/L:           $+17.00
+  Duration:      14 minutes
+  Exit Reason:   Trailing Stop (13%)
+  Result:        WIN ✓
+
+Trade #51:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 10:30:32
+  Underlying:    SPX @ $6963.02
+  VIX:           16.22
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.11
+  P/L:           $+39.00
+  Duration:      10 minutes
+  Exit Reason:   Trailing Stop (24%)
+  Result:        WIN ✓
+
+Trade #52:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 11:00:06
+  Underlying:    SPX @ $6968.14
+  VIX:           16.15
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.97
+  P/L:           $-47.00
+  Duration:      20 minutes
+  Exit Reason:   Stop Loss (-19%)
+  Result:        LOSS ✗
+
+Trade #53:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 11:00:16
+  Underlying:    SPX @ $6967.03
+  VIX:           16.15
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.35
+  P/L:           $+15.00
+  Duration:      18 minutes
+  Exit Reason:   Trailing Stop (16%)
+  Result:        WIN ✓
+
+Trade #54:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 11:00:47
+  Underlying:    SPX @ $6967.03
+  VIX:           16.15
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.25
+  P/L:           $+25.00
+  Duration:      8 minutes
+  Exit Reason:   Trailing Stop (13%)
+  Result:        WIN ✓
+
+Trade #55:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 11:30:00
+  Underlying:    SPX @ $6972.15
+  VIX:           16.16
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $3.10
+  P/L:           $-60.00
+  Duration:      10 minutes
+  Exit Reason:   Stop Loss (-24%)
+  Result:        LOSS ✗
+
+Trade #56:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 11:30:14
+  Underlying:    SPX @ $6972.35
+  VIX:           16.16
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $3.52
+  P/L:           $-102.00
+  Duration:      6 minutes
+  Exit Reason:   EMERGENCY Stop Loss (-41%)
+  Result:        LOSS ✗
+
+Trade #57:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 11:30:31
+  Underlying:    SPX @ $6971.15
+  VIX:           16.17
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.10
+  P/L:           $+40.00
+  Duration:      9 minutes
+  Exit Reason:   Trailing Stop (19%)
+  Result:        WIN ✓
+
+Trade #58:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 12:00:19
+  Underlying:    SPX @ $6973.46
+  VIX:           16.16
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $3.72
+  P/L:           $-122.00
+  Duration:      3 minutes
+  Exit Reason:   EMERGENCY Stop Loss (-49%)
+  Result:        LOSS ✗
+
+Trade #59:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 12:00:21
+  Underlying:    SPX @ $6973.46
+  VIX:           16.16
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $3.54
+  P/L:           $-104.00
+  Duration:      1 minutes
+  Exit Reason:   EMERGENCY Stop Loss (-42%)
+  Result:        LOSS ✗
+
+Trade #60:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 12:00:50
+  Underlying:    SPX @ $6972.25
+  VIX:           16.15
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.96
+  P/L:           $-46.00
+  Duration:      9 minutes
+  Exit Reason:   Stop Loss (-18%)
+  Result:        LOSS ✗
+
+Trade #61:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 12:30:07
+  Underlying:    SPX @ $6967.74
+  VIX:           16.16
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $3.05
+  P/L:           $-55.00
+  Duration:      15 minutes
+  Exit Reason:   Stop Loss (-22%)
+  Result:        LOSS ✗
+
+Trade #62:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 12:30:29
+  Underlying:    SPX @ $6968.14
+  VIX:           16.16
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $1.95
+  P/L:           $+55.00
+  Duration:      15 minutes
+  Exit Reason:   Trailing Stop (25%)
+  Result:        WIN ✓
+
+Trade #63:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-15 12:30:38
+  Underlying:    SPX @ $6968.14
+  VIX:           16.16
+  Strikes:       6975
+  Entry Credit:  $2.50
+  Exit Credit:   $2.19
+  P/L:           $+31.00
+  Duration:      4 minutes
+  Exit Reason:   Trailing Stop (17%)
+  Result:        WIN ✓
+
+Trade #64:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-16 09:36:04
+  Underlying:    SPX @ $6960.02
+  VIX:           15.76
+  Strikes:       6965
+  Entry Credit:  $2.50
+  Exit Credit:   $3.30
+  P/L:           $-80.00
+  Duration:      9 minutes
+  Exit Reason:   Stop Loss (-32%)
+  Result:        LOSS ✗
+
+Trade #65:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-16 09:36:20
+  Underlying:    SPX @ $6960.92
+  VIX:           15.76
+  Strikes:       6980
+  Entry Credit:  $2.50
+  Exit Credit:   $2.14
+  P/L:           $+36.00
+  Duration:      26 minutes
+  Exit Reason:   Trailing Stop (18%)
+  Result:        WIN ✓
+
+Trade #66:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-16 09:36:36
+  Underlying:    SPX @ $6960.92
+  VIX:           15.73
+  Strikes:       6980
+  Entry Credit:  $2.50
+  Exit Credit:   $2.26
+  P/L:           $+24.00
+  Duration:      10 minutes
+  Exit Reason:   Trailing Stop (16%)
+  Result:        WIN ✓
+
+Trade #67:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-16 10:00:25
+  Underlying:    SPX @ $6941.76
+  VIX:           15.94
+  Strikes:       6965
+  Entry Credit:  $2.50
+  Exit Credit:   $2.44
+  P/L:           $+6.00
+  Duration:      26 minutes
+  Exit Reason:   Trailing Stop (14%)
+  Result:        WIN ✓
+
+Trade #68:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-16 10:00:30
+  Underlying:    SPX @ $6941.76
+  VIX:           15.94
+  Strikes:       6965
+  Entry Credit:  $2.50
+  Exit Credit:   $2.25
+  P/L:           $+25.00
+  Duration:      11 minutes
+  Exit Reason:   Trailing Stop (16%)
+  Result:        WIN ✓
+
+Trade #69:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-16 10:00:57
+  Underlying:    SPX @ $6942.26
+  VIX:           15.94
+  Strikes:       6965
+  Entry Credit:  $2.50
+  Exit Credit:   $2.23
+  P/L:           $+27.00
+  Duration:      25 minutes
+  Exit Reason:   Trailing Stop (12%)
+  Result:        WIN ✓
+
+Trade #70:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-16 10:30:04
+  Underlying:    SPX @ $6939.45
+  VIX:           15.87
+  Strikes:       6965
+  Entry Credit:  $2.50
+  Exit Credit:   $2.35
+  P/L:           $+15.00
+  Duration:      29 minutes
+  Exit Reason:   Trailing Stop (20%)
+  Result:        WIN ✓
+
+Trade #71:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-16 10:30:14
+  Underlying:    SPX @ $6939.45
+  VIX:           15.87
+  Strikes:       6965
+  Entry Credit:  $2.50
+  Exit Credit:   $2.38
+  P/L:           $+12.00
+  Duration:      27 minutes
+  Exit Reason:   Trailing Stop (14%)
+  Result:        WIN ✓
+
+Trade #72:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-16 10:30:36
+  Underlying:    SPX @ $6937.85
+  VIX:           15.88
+  Strikes:       6965
+  Entry Credit:  $2.50
+  Exit Credit:   $2.89
+  P/L:           $-39.00
+  Duration:      20 minutes
+  Exit Reason:   Stop Loss (-16%)
+  Result:        LOSS ✗
+
+Trade #73:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-16 11:00:18
+  Underlying:    SPX @ $6939.86
+  VIX:           15.88
+  Strikes:       6965
+  Entry Credit:  $2.50
+  Exit Credit:   $2.97
+  P/L:           $-47.00
+  Duration:      24 minutes
+  Exit Reason:   Stop Loss (-19%)
+  Result:        LOSS ✗
+
+Trade #74:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-16 11:00:18
+  Underlying:    SPX @ $6939.86
+  VIX:           15.88
+  Strikes:       C:6985/6995 P:6895/6885
+  Entry Credit:  $0.70
+  Exit Credit:   $0.40
+  P/L:           $+30.00
+  Duration:      101 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 50%)
+  Result:        WIN ✓
+
+Trade #75:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-16 11:00:24
+  Underlying:    SPX @ $6939.86
+  VIX:           15.88
+  Strikes:       6965
+  Entry Credit:  $2.50
+  Exit Credit:   $2.26
+  P/L:           $+24.00
+  Duration:      28 minutes
+  Exit Reason:   Trailing Stop (12%)
+  Result:        WIN ✓
+
+Trade #76:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-16 11:00:24
+  Underlying:    SPX @ $6939.86
+  VIX:           15.88
+  Strikes:       C:6985/6995 P:6895/6885
+  Entry Credit:  $0.70
+  Exit Credit:   $0.38
+  P/L:           $+32.00
+  Duration:      104 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 50%)
+  Result:        WIN ✓
+
+Trade #77:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-16 11:00:49
+  Underlying:    SPX @ $6942.76
+  VIX:           15.88
+  Strikes:       6965
+  Entry Credit:  $2.50
+  Exit Credit:   $2.91
+  P/L:           $-41.00
+  Duration:      11 minutes
+  Exit Reason:   Stop Loss (-16%)
+  Result:        LOSS ✗
+
+Trade #78:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-16 11:30:05
+  Underlying:    SPX @ $6949.29
+  VIX:           15.82
+  Strikes:       6965
+  Entry Credit:  $2.50
+  Exit Credit:   $2.23
+  P/L:           $+27.00
+  Duration:      22 minutes
+  Exit Reason:   Trailing Stop (12%)
+  Result:        WIN ✓
+
+Trade #79:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-16 11:30:29
+  Underlying:    SPX @ $6949.79
+  VIX:           15.80
+  Strikes:       6965
+  Entry Credit:  $2.50
+  Exit Credit:   $2.20
+  P/L:           $+30.00
+  Duration:      30 minutes
+  Exit Reason:   Trailing Stop (13%)
+  Result:        WIN ✓
+
+Trade #80:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-16 12:00:09
+  Underlying:    SPX @ $6948.38
+  VIX:           15.79
+  Strikes:       6965
+  Entry Credit:  $2.50
+  Exit Credit:   $2.12
+  P/L:           $+38.00
+  Duration:      24 minutes
+  Exit Reason:   Trailing Stop (15%)
+  Result:        WIN ✓
+
+Trade #81:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-16 12:00:16
+  Underlying:    SPX @ $6948.38
+  VIX:           15.79
+  Strikes:       6965
+  Entry Credit:  $2.50
+  Exit Credit:   $2.28
+  P/L:           $+22.00
+  Duration:      10 minutes
+  Exit Reason:   Trailing Stop (14%)
+  Result:        WIN ✓
+
+Trade #82:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-16 12:00:40
+  Underlying:    SPX @ $6948.38
+  VIX:           15.79
+  Strikes:       6965
+  Entry Credit:  $2.50
+  Exit Credit:   $2.35
+  P/L:           $+15.00
+  Duration:      20 minutes
+  Exit Reason:   Trailing Stop (12%)
+  Result:        WIN ✓
+
+Trade #83:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-16 12:30:22
+  Underlying:    SPX @ $6946.58
+  VIX:           15.81
+  Strikes:       6965
+  Entry Credit:  $2.50
+  Exit Credit:   $2.16
+  P/L:           $+34.00
+  Duration:      20 minutes
+  Exit Reason:   Trailing Stop (17%)
+  Result:        WIN ✓
+
+Trade #84:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-16 12:30:22
+  Underlying:    SPX @ $6946.58
+  VIX:           15.81
+  Strikes:       C:6985/6995 P:6910/6900
+  Entry Credit:  $0.60
+  Exit Credit:   $0.31
+  P/L:           $+29.00
+  Duration:      108 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 50%)
+  Result:        WIN ✓
+
+Trade #85:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-16 12:30:27
+  Underlying:    SPX @ $6946.58
+  VIX:           15.81
+  Strikes:       6965
+  Entry Credit:  $2.50
+  Exit Credit:   $2.33
+  P/L:           $+17.00
+  Duration:      36 minutes
+  Exit Reason:   Trailing Stop (12%)
+  Result:        WIN ✓
+
+Trade #86:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-16 12:30:27
+  Underlying:    SPX @ $6946.58
+  VIX:           15.81
+  Strikes:       C:6985/6995 P:6910/6900
+  Entry Credit:  $0.60
+  Exit Credit:   $0.32
+  P/L:           $+28.00
+  Duration:      106 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 50%)
+  Result:        WIN ✓
+
+Trade #87:
+  Strategy:      GEX PIN
+  Date/Time:     2026-01-16 12:30:54
+  Underlying:    SPX @ $6946.78
+  VIX:           15.80
+  Strikes:       6965
+  Entry Credit:  $2.50
+  Exit Credit:   $2.90
+  P/L:           $-40.00
+  Duration:      11 minutes
+  Exit Reason:   Stop Loss (-16%)
+  Result:        LOSS ✗
+
+Trade #88:
+  Strategy:      OTM IRON CONDOR
+  Date/Time:     2026-01-16 12:30:54
+  Underlying:    SPX @ $6946.78
+  VIX:           15.80
+  Strikes:       C:6985/6995 P:6910/6900
+  Entry Credit:  $0.60
+  Exit Credit:   $0.34
+  P/L:           $+26.00
+  Duration:      104 minutes
+  Exit Reason:   OTM 50% Lock-In Stop (peak 50%)
+  Result:        WIN ✓
+
+================================================================================================================================================================

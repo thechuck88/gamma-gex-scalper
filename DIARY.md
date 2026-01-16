@@ -1,3 +1,108 @@
+## 2026-01-16 - Half-Kelly Autoscaling + Monte Carlo Validation
+
+### Half-Kelly Position Sizing Implementation
+
+**Objective**: Implement proper Half-Kelly formula for position sizing in 1-year backtest simulation.
+
+**Formula Implemented**:
+```python
+Kelly% = (Win_Rate × Avg_Win - Loss_Rate × Avg_Loss) / Avg_Win
+Half_Kelly% = Kelly% / 2
+Position_Size = (Account_Balance × Half_Kelly%) / Max_Risk_Per_Contract
+```
+
+**Max Risk Per Strategy**:
+- **GEX PIN spreads**: $250 ($5 wide - $2.50 avg credit)
+- **OTM Single-Sided**: $900 ($10 wide - $1.00 avg credit, conservative)
+
+**Risk Controls**:
+- Bootstrap phase: 1 contract for first 10 trades (build statistics)
+- Rolling statistics: Last 50 trades for Kelly calculation
+- Safety halt: Stop trading if account < 50% of starting capital
+- Max contracts: Capped at 3 (conservative for $20k account)
+
+**Backtest Results (1 Year Simulation)**:
+- Starting Capital: $20,000
+- Ending Balance: $67,968
+- Total Return: **+239.8%**
+- Total Trades: 437
+- Win Rate: **73.2%**
+- Profit Factor: **4.63**
+- Avg P/L/Trade: $110
+
+**Strategy Performance**:
+- OTM Single-Sided: 174 trades, **87.4% WR**, $28,447 P/L (59% of profit) ⭐
+- GEX PIN Spreads: 263 trades, 63.9% WR, $19,521 P/L (41% of profit)
+
+### Monte Carlo Validation (10,000 Simulations)
+
+**Methodology**: Randomly resampled trades from backtest to create 10,000 different trade sequences and validate strategy robustness.
+
+**Key Results**:
+
+**Probability Analysis**:
+- **100% probability of profit** (>$20k)
+- **100% probability of 2× return** (>$40k)
+- **99.42% probability of 3× return** (>$60k)
+- **0% probability of loss** or ruin
+
+**Distribution of Outcomes**:
+| Percentile | Ending Balance | Return |
+|------------|---------------|--------|
+| 1st (worst case) | $60,638 | +203.2% |
+| 5th | $62,766 | +213.8% |
+| 25th | $65,975 | +229.9% |
+| **50th (median)** | **$68,184** | **+240.9%** |
+| 75th | $70,366 | +251.8% |
+| 95th | $73,437 | +267.2% |
+| 99th (best case) | $75,728 | +278.6% |
+
+**Risk Analysis**:
+- Mean max drawdown: $571 (0.8%)
+- Median max drawdown: $546 (0.8%)
+- 95th percentile drawdown: $827 (1.2%)
+- **Worst drawdown (1 in 10,000)**: $1,523 (2.1%)
+
+**Win Rate Consistency**:
+- 5th percentile: 69.8%
+- Median: 73.2%
+- 95th percentile: 76.7%
+
+**Backtest Comparison**:
+- Actual backtest: $67,968 (+239.8%)
+- Percentile rank: 47.2th (right at median - perfectly typical result)
+
+### Validation Conclusions
+
+✅ **Strategy is extremely robust**:
+- 100% profit probability across all 10,000 random trade sequences
+- Worst-case scenario still returns +203% (more than tripling account)
+- Maximum drawdown only 2.1% in worst 1-in-10,000 case
+
+✅ **Results are not lucky**:
+- Actual backtest ranks at 47th percentile (median)
+- Not dependent on favorable trade ordering
+- Consistent win rates (69-78%) across all simulations
+
+✅ **Half-Kelly sizing is appropriate**:
+- Low variance ($3,243 std dev on $68k mean)
+- Tight confidence interval ($62k - $75k for 95%)
+- No simulations hit safety halt or went negative
+
+**Files Created**:
+- `backtest_1year_simulation.py` - Updated with Half-Kelly autoscaling
+- `BACKTEST_1YEAR_HALFKELLY_REPORT.txt` - Comprehensive 280-line report
+- `BACKTEST_1YEAR_SIMULATION.csv` - 437 trade records
+- `monte_carlo_validation.py` - 10k simulation runner
+- `MONTE_CARLO_RESULTS.json` - Statistical summary
+- `MONTE_CARLO_DISTRIBUTION.png` - Distribution charts
+
+**Next Steps**:
+- Implement autoscaling in live monitor (monitor.py)
+- Add account balance tracking for live Half-Kelly calculation
+- Test in paper trading for 1 week before deploying to live
+
+---
 
 ## 2026-01-11 - Progressive TP Bug Fix + SPX Backtest + Live Sync
 

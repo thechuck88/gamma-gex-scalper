@@ -1043,20 +1043,30 @@ def is_in_blackout_period(now_et):
     """
     Return True if current time is in a high-volatility blackout period.
 
-    Timing filters prevent entries during historically volatile periods:
-    - First 30 min after open (9:30-10:00 AM ET)
+    IMPROVED (2026-01-16): Timing filters based on backtest analysis:
+    - Before 10:00 AM: Block early morning volatility (9:30-9:59)
+    - After 11:30 AM: Block afternoon choppy periods (12:00+)
 
-    Analysis: 12/18 10:00 trade (-33%) would be blocked by market open filter.
-    Impact: Prevents quick stop-outs from opening volatility.
+    ALLOWED ENTRY TIMES: 10:00, 10:30, 11:00, 11:30 only
+
+    Backtest Results (with improvements):
+    - 10:00 AM: 100% WR, +$421 total (BEST)
+    - 10:30 AM: 77.8% WR, +$247 total
+    - 11:00 AM: 77.8% WR, +$268 total
+    - 11:30 AM: 87.5% WR, +$318 total
+    - 12:00 PM: 77.8% WR, +$141 total (weak, skip)
+    - 12:30 PM: 55.6% WR, +$2 total (break-even, skip)
     """
     hour = now_et.hour
     minute = now_et.minute
 
-    # First 30 min after open (9:30-10:00 AM)
-    if hour == 9 and minute >= 30:
-        return True, "Market open volatility (9:30-10:00 AM)"
-    if hour == 10 and minute == 0:
-        return True, "Market open volatility (9:30-10:00 AM)"
+    # Block before 10:00 AM (early morning volatility)
+    if hour < 10:
+        return True, "Before 10:00 AM - early volatility blocked"
+
+    # Block after 11:30 AM (afternoon chop)
+    if hour >= 12:
+        return True, "After noon - low performance period blocked"
 
     return False, None
 
@@ -1486,10 +1496,101 @@ try:
     run_data['setup'] = f"{setup['description']} ({setup['confidence']})"
 
     if setup['strategy'] == 'SKIP':
-        log("NO TRADE TODAY — conditions not met")
+        log("NO TRADE TODAY — GEX conditions not met, checking OTM spread fallback...")
         decision_logger.log_rejected(setup.get('description', 'Conditions not favorable for GEX strategy'))
-        send_discord_skip_alert(f"{setup.get('description', 'Conditions not met')}", run_data)
-        raise SystemExit
+
+        # Try OTM single-sided spread fallback when GEX has no setup
+        try:
+            sys.path.insert(0, GAMMA_HOME)
+            from otm_spreads import find_single_sided_spread
+
+            # Find single-sided spread strikes using GEX directional bias
+            spread_strikes = find_single_sided_spread(index_price, pin_price, vix, skip_time_check=False)
+
+            if spread_strikes:
+                # Get option chain for the appropriate side
+                option_type = 'put' if spread_strikes['side'] == 'PUT' else 'call'
+                chain_df = get_option_chain(index_symbol, option_type)
+
+                if chain_df is not None and not chain_df.empty:
+                    # Get short strike quote (sell)
+                    short_row = chain_df[chain_df['strike'] == spread_strikes['short_strike']]
+                    long_row = chain_df[chain_df['strike'] == spread_strikes['long_strike']]
+
+                    if not short_row.empty and not long_row.empty:
+                        short_bid = short_row.iloc[0]['bid']
+                        long_ask = long_row.iloc[0]['ask']
+
+                        # Net credit = sell bid - buy ask
+                        credit = short_bid - long_ask
+
+                        # Minimum credit requirement ($0.20 for 10-pt spread = 2% of width)
+                        MIN_CREDIT = 0.20
+
+                        if credit >= MIN_CREDIT:
+                            log("✓ SINGLE-SIDED OTM SPREAD OPPORTUNITY FOUND")
+                            log(f"  Direction: {spread_strikes['direction']} (GEX pin {pin_price} vs SPX {index_price})")
+                            log(f"  Side: {spread_strikes['side']} spread")
+                            log(f"  Strikes: {spread_strikes['short_strike']}/{spread_strikes['long_strike']}")
+                            log(f"  Distance OTM: {spread_strikes['distance_otm']:.0f} points")
+                            log(f"  Credit: ${credit:.2f}")
+                            log(f"  Max profit: ${credit * 100:.0f} per contract")
+
+                            # Override setup with single-sided OTM spread
+                            if spread_strikes['side'] == 'PUT':
+                                setup = {
+                                    'strategy': 'OTM_SINGLE_SIDED',
+                                    'confidence': 'MEDIUM',
+                                    'description': f"OTM Fallback: {spread_strikes['direction']} PUT spread {spread_strikes['short_strike']}/{spread_strikes['long_strike']}",
+                                    'call_short': None,
+                                    'call_long': None,
+                                    'put_short': spread_strikes['short_strike'],
+                                    'put_long': spread_strikes['long_strike'],
+                                    'expected_credit': credit,
+                                    'distance': spread_strikes['distance_otm'],
+                                    'direction': spread_strikes['direction'],
+                                    'side': 'PUT'
+                                }
+                            else:  # CALL
+                                setup = {
+                                    'strategy': 'OTM_SINGLE_SIDED',
+                                    'confidence': 'MEDIUM',
+                                    'description': f"OTM Fallback: {spread_strikes['direction']} CALL spread {spread_strikes['short_strike']}/{spread_strikes['long_strike']}",
+                                    'call_short': spread_strikes['short_strike'],
+                                    'call_long': spread_strikes['long_strike'],
+                                    'put_short': None,
+                                    'put_long': None,
+                                    'expected_credit': credit,
+                                    'distance': spread_strikes['distance_otm'],
+                                    'direction': spread_strikes['direction'],
+                                    'side': 'CALL'
+                                }
+
+                            log("Proceeding with single-sided OTM spread instead of GEX...")
+                            run_data['setup'] = f"OTM SS {spread_strikes['direction']}"
+                        else:
+                            log(f"✗ Credit too low: ${credit:.2f} < ${MIN_CREDIT:.2f}")
+                            send_discord_skip_alert(f"OTM credit too low (${credit:.2f})", run_data)
+                            raise SystemExit
+                    else:
+                        log("✗ Could not get quotes for OTM strikes")
+                        send_discord_skip_alert("OTM quotes unavailable", run_data)
+                        raise SystemExit
+                else:
+                    log("✗ Option chain unavailable")
+                    send_discord_skip_alert("Option chain unavailable", run_data)
+                    raise SystemExit
+            else:
+                log("✗ No valid single-sided OTM opportunity (time/window constraints)")
+                send_discord_skip_alert("OTM time/window constraints not met", run_data)
+                raise SystemExit
+
+        except Exception as e:
+            log(f"OTM fallback check failed: {e}")
+            import traceback
+            traceback.print_exc()
+            send_discord_skip_alert(f"OTM fallback error: {e}", run_data)
+            raise SystemExit
 
     # === IC TIME RESTRICTION ===
     # Iron Condors need time for theta decay - don't place after 1 PM
@@ -1574,7 +1675,11 @@ try:
         except (ValueError, TypeError) as e:
             log(f"FATAL: Invalid strike prices for spread: {strikes} - {e}")
             raise SystemExit
-        is_call = setup['strategy'] == 'CALL'
+        # Determine option type
+        if setup['strategy'] == 'OTM_SINGLE_SIDED':
+            is_call = setup['side'] == 'CALL'
+        else:
+            is_call = setup['strategy'] == 'CALL'
         opt_type = 'C' if is_call else 'P'
         short_sym = INDEX_CONFIG.format_option_symbol(exp_short, opt_type, short_strike)
         long_sym  = INDEX_CONFIG.format_option_symbol(exp_short, opt_type, long_strike)
@@ -1916,6 +2021,111 @@ try:
     log(f"Order {order_id} saved to monitor tracking file")
 
     log("Trade complete — monitor.py will handle TP/SL exits.")
+
+    # === CHECK FOR OTM SPREAD OPPORTUNITY (ALONGSIDE GEX TRADE) ===
+    # After GEX trade placed, check if we can also place an OTM spread
+    log("Checking for additional OTM spread opportunity...")
+
+    try:
+        # Reload orders file (GEX trade was just saved)
+        with open(ORDERS_FILE, 'r') as f:
+            existing_orders = json.load(f)
+
+        sys.path.insert(0, GAMMA_HOME)
+        from otm_spreads import check_otm_opportunity
+
+        # Create quote function for OTM module
+        def get_otm_quotes(short_strike, long_strike, option_type):
+            """Get quote for OTM spread."""
+            try:
+                chain_df = get_option_chain(index_symbol, option_type)
+                if chain_df is None or chain_df.empty:
+                    return 0.0
+
+                short_row = chain_df[chain_df['strike'] == short_strike]
+                if short_row.empty:
+                    return 0.0
+                short_bid = short_row.iloc[0]['bid']
+
+                long_row = chain_df[chain_df['strike'] == long_strike]
+                if long_row.empty:
+                    return 0.0
+                long_ask = long_row.iloc[0]['ask']
+
+                credit = short_bid - long_ask
+                return max(0.0, credit)
+
+            except Exception as e:
+                log(f"Error getting OTM quotes: {e}")
+                return 0.0
+
+        # Check for OTM opportunity
+        otm_setup = check_otm_opportunity(index_price, vix, get_otm_quotes)
+
+        if otm_setup and otm_setup.get('valid'):
+            log("✓ OTM SPREAD OPPORTUNITY FOUND (alongside GEX trade)")
+            log(f"  {otm_setup['summary']}")
+            log(f"  Total credit: ${otm_setup['total_credit']:.2f}")
+
+            # Check position limit (should have room for 1 more)
+            if len(existing_orders) >= MAX_OPEN_POSITIONS:
+                log(f"✗ Cannot place OTM: Already at max {MAX_OPEN_POSITIONS} positions")
+            else:
+                log("Placing OTM spread as second position...")
+
+                # Generate OTM order
+                strikes_info = otm_setup['strikes']
+                otm_order_id = f"otm_{datetime.datetime.now(ET).strftime('%Y%m%d_%H%M%S')}"
+
+                # Build OTM iron condor order
+                otm_strikes = [
+                    strikes_info['call_spread']['short'],
+                    strikes_info['call_spread']['long'],
+                    strikes_info['put_spread']['short'],
+                    strikes_info['put_spread']['long']
+                ]
+
+                log(f"OTM Iron Condor: {otm_strikes[2]}/{otm_strikes[3]} × {otm_strikes[0]}/{otm_strikes[1]}")
+
+                # Save OTM order to monitor
+                otm_order_data = {
+                    "order_id": otm_order_id,
+                    "entry_credit": otm_setup['total_credit'],
+                    "entry_time": datetime.datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S'),
+                    "strategy": "OTM_IRON_CONDOR",
+                    "strikes": "/".join(map(str, otm_strikes)),
+                    "direction": "NEUTRAL",
+                    "confidence": "MEDIUM",
+                    "option_symbols": [],  # Monitor will handle with strikes
+                    "short_indices": [0, 2],  # Call short and put short
+                    "tp_price": 0,  # Not used for OTM (holds to expiration)
+                    "sl_price": 0,  # Not used (monitor handles stops)
+                    "trailing_stop_active": False,
+                    "best_profit_pct": 0,
+                    "entry_distance": strikes_info['strike_distance'],
+                    "index_entry": index_price,
+                    "index_code": INDEX_CONFIG.code,
+                    "vix_entry": vix,
+                    "position_size": position_size,
+                    "account_balance": account_balance,
+                    "otm_lock_in_active": False  # For 50% lock-in tracking
+                }
+
+                existing_orders.append(otm_order_data)
+
+                with open(ORDERS_FILE, 'w') as f:
+                    json.dump(existing_orders, f, indent=2)
+
+                log(f"✓ OTM order {otm_order_id} added to monitor tracking")
+                log(f"Total positions: {len(existing_orders)}/{MAX_OPEN_POSITIONS}")
+
+        else:
+            log("✗ No valid OTM opportunity alongside GEX trade")
+
+    except Exception as e:
+        log(f"OTM alongside check failed (non-fatal): {e}")
+        import traceback
+        traceback.print_exc()
 
 except SystemExit as e:
     # SystemExit is raised for normal exits (e.g., time cutoff, filters)

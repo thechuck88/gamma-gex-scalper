@@ -80,16 +80,16 @@ STOP_LOSS_PCT = 0.15            # OPTIMIZATION: 15% stop loss (allows breathing 
 AUTO_CLOSE_HOUR = 15            # Auto-close at 3:30 PM ET (was 3:50)
 AUTO_CLOSE_MINUTE = 30          # Earlier close avoids final 30-min chaos
 
-# Trailing stop settings
+# Trailing stop settings (IMPROVED 2026-01-16)
 TRAILING_STOP_ENABLED = True
-TRAILING_TRIGGER_PCT = 0.20     # OPTIMIZATION #4: Activate trailing stop at 20% profit (was 25%) - locks in profit earlier
-TRAILING_LOCK_IN_PCT = 0.12     # OPTIMIZATION #4: Lock in 12% profit (was 10%) - better floor when trailing activates
-TRAILING_DISTANCE_MIN = 0.08    # Minimum trail distance as profit rises (8%)
+TRAILING_TRIGGER_PCT = 0.30     # OPTIMIZATION: Activate at 30% profit (was 20%) - hold winners longer
+TRAILING_LOCK_IN_PCT = 0.20     # OPTIMIZATION: Lock in 20% profit (was 12%) - proportionally adjusted
+TRAILING_DISTANCE_MIN = 0.10    # Minimum trail distance as profit rises (10%, was 8%)
 TRAILING_TIGHTEN_RATE = 0.4     # How fast it tightens (0.4 = every 2.5% gain, trail tightens 1%)
 
 # Stop loss grace period - let positions settle before triggering SL
 SL_GRACE_PERIOD_SEC = 540       # OPTIMIZATION #2: 9 minutes grace (allows 0DTE to work through initial gamma volatility)
-SL_EMERGENCY_PCT = 0.40         # Emergency stop - trigger immediately if loss exceeds 40%
+SL_EMERGENCY_PCT = 0.25         # OPTIMIZATION: Emergency stop at 25% (was 40%) - tighter risk control
 
 # Progressive hold-to-expiration settings (2026-01-10)
 PROGRESSIVE_HOLD_ENABLED = True   # Enable progressive hold strategy
@@ -1057,15 +1057,87 @@ def check_and_close_positions():
         is_holding = order.get('hold_to_expiry', False)
         hold_status = " [HOLD]" if is_holding else ""
 
+        # OTM spread: Check for 50% profit lock-in (both IC and single-sided)
+        strategy = order.get('strategy', 'SPREAD')
+        otm_lock_in_active = order.get('otm_lock_in_active', False)
+
+        is_otm_strategy = strategy in ['OTM_IRON_CONDOR', 'OTM_SINGLE_SIDED']
+
+        if is_otm_strategy and not otm_lock_in_active and profit_pct >= 0.50:
+            order['otm_lock_in_active'] = True
+            otm_lock_in_active = True
+            orders_modified = True
+            log(f"*** OTM 50% LOCK-IN ACTIVATED for {order_id} at {profit_pct*100:.1f}% profit ***")
+
+        otm_status = ""
+        if is_otm_strategy:
+            if profit_pct >= 0.70:
+                otm_status = " [OTM: >70%, HOLDING TO EXPIRATION]"
+            elif otm_lock_in_active:
+                otm_status = " [OTM: 50% locked in]"
+
         log(f"Order {order_id}: entry=${entry_credit:.2f} mid=${current_value:.2f} ask=${ask_value:.2f} "
             f"P/L={profit_pct*100:+.1f}% (SL_PL={profit_pct_sl*100:+.1f}%, best={best_profit_pct*100:.1f}%) "
-            f"TP={progressive_tp_pct*100:.0f}%{trailing_status}{hold_status}")
+            f"TP={progressive_tp_pct*100:.0f}%{trailing_status}{hold_status}{otm_status}")
 
         exit_reason = None
 
-        # Check time-based auto-close (3:50 PM for 0DTE)
-        # BUT: Skip auto-close for positions marked for hold-to-expiry
-        if now.hour == AUTO_CLOSE_HOUR and now.minute >= AUTO_CLOSE_MINUTE and not is_holding:
+        # OTM spreads: Special exit logic (both IC and single-sided)
+        if is_otm_strategy:
+            # If profit >= 70%, hold to expiration (only exit on emergency stop)
+            if profit_pct >= 0.70:
+                # Check emergency stop only
+                if profit_pct_sl <= -SL_EMERGENCY_PCT:
+                    exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
+                # Check expiration
+                elif now.hour >= 16:
+                    current_value = 0.0
+                    exit_reason = "OTM Hold-to-Expiry: Full Credit Collected"
+                # Otherwise hold (skip all other exits)
+
+            # If 50% lock-in active but profit < 70%, protect the 50%
+            elif otm_lock_in_active:
+                # Exit if drops below 50% locked-in level
+                if profit_pct < 0.50:
+                    exit_reason = f"OTM 50% Lock-In Stop (from peak {best_profit_pct*100:.0f}%)"
+                # Check emergency stop
+                elif profit_pct_sl <= -SL_EMERGENCY_PCT:
+                    exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
+                # Check expiration
+                elif now.hour >= 16:
+                    current_value = 0.0
+                    exit_reason = "OTM Expiration: Collecting Credit"
+
+            # Below 50% profit: Use normal stop loss logic
+            else:
+                # Calculate position age for grace period
+                try:
+                    if 'T' in entry_time and ('+' in entry_time or 'Z' in entry_time):
+                        entry_dt = datetime.datetime.fromisoformat(entry_time.replace('Z', '+00:00'))
+                        entry_dt = entry_dt.astimezone(ET)
+                    else:
+                        entry_dt = datetime.datetime.strptime(entry_time, '%Y-%m-%d %H:%M:%S')
+                        entry_dt = ET.localize(entry_dt)
+                    position_age_sec = (now - entry_dt).total_seconds()
+                except (ValueError, TypeError, AttributeError) as e:
+                    log(f"Error parsing entry time '{entry_time}' for SL check: {e}")
+                    position_age_sec = 9999
+
+                # Check stop losses
+                if profit_pct_sl <= -SL_EMERGENCY_PCT:
+                    exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
+                elif profit_pct_sl <= -STOP_LOSS_PCT and position_age_sec >= SL_GRACE_PERIOD_SEC:
+                    exit_reason = f"Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
+                elif profit_pct_sl <= -STOP_LOSS_PCT:
+                    grace_remaining = SL_GRACE_PERIOD_SEC - position_age_sec
+                    log(f"  ⏳ SL triggered but in grace period ({grace_remaining:.0f}s remaining) - holding")
+                # Check expiration
+                elif now.hour >= 16:
+                    current_value = 0.0
+                    exit_reason = "OTM Expiration"
+
+        # GEX spreads: Use existing logic
+        elif now.hour == AUTO_CLOSE_HOUR and now.minute >= AUTO_CLOSE_MINUTE and not is_holding:
             exit_reason = "Auto-close 3:50 PM (0DTE)"
 
         # Check after 4 PM — assume expired worthless if still open
