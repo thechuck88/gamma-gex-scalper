@@ -74,7 +74,10 @@ LOG_FILE_PAPER = f"{GAMMA_HOME}/data/monitor_paper.log"
 LOG_FILE_LIVE = f"{GAMMA_HOME}/data/monitor_live.log"
 
 # Monitor settings
-POLL_INTERVAL = 15              # Seconds between checks (tighter stop loss monitoring)
+# OPTIMIZATION (2026-01-19): Reduced from 15s to 3s for 0DTE options
+# 0DTE options can move 50-100% in 15 seconds, causing stop violations
+# 3-second polling catches stops at intended prices, prevents $10-20 extra loss per contract
+POLL_INTERVAL = 3               # Seconds between checks (ultra-tight for 0DTE fast moves)
 PROFIT_TARGET_PCT = 0.50        # Close at 50% profit
 STOP_LOSS_PCT = 0.15            # OPTIMIZATION: 15% stop loss (allows breathing room for 0DTE gamma swings)
 AUTO_CLOSE_HOUR = 15            # Auto-close at 3:30 PM ET (was 3:50)
@@ -1282,7 +1285,7 @@ def main():
 
     daily_summary_sent = False
     heartbeat_counter = 0
-    HEARTBEAT_INTERVAL = 20  # Send heartbeat every 20 cycles (5 min at 15s poll)
+    HEARTBEAT_INTERVAL = 100  # Send heartbeat every 100 cycles (5 min at 3s poll)
 
     while True:
         try:
