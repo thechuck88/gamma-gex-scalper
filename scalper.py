@@ -479,17 +479,44 @@ def get_price(symbol, use_live=False):
         log(f"Tradier quote unexpected error for {symbol}: {e}")
         return None
 
-def get_vix_yfinance():
-    """Fetch VIX from Yahoo Finance as backup."""
-    try:
-        vix_data = yf.download("^VIX", period="1d", progress=False)
-        if not vix_data.empty:
-            close = vix_data['Close'].iloc[-1]
-            if isinstance(close, pd.Series):
-                close = close.iloc[0]
-            return float(close)
-    except Exception as e:
-        log(f"yfinance VIX fetch failed: {e}")
+def get_vix_yfinance(max_retries=3, base_delay=1.0):
+    """
+    Fetch VIX from Yahoo Finance as backup (when Tradier unavailable).
+    Uses exponential backoff retry.
+
+    Args:
+        max_retries: Maximum retry attempts (default 3)
+        base_delay: Initial delay in seconds (default 1.0)
+
+    Returns:
+        float: VIX value if available, None otherwise
+    """
+    for attempt in range(max_retries):
+        try:
+            vix_data = yf.download("^VIX", period="1d", progress=False)
+            if not vix_data.empty:
+                close = vix_data['Close'].iloc[-1]
+                if isinstance(close, pd.Series):
+                    close = close.iloc[0]
+                vix_value = float(close)
+                if attempt > 0:
+                    log(f"yfinance VIX succeeded on retry {attempt + 1}: {vix_value:.2f}")
+                return vix_value
+
+            # Empty data - retry
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)
+                log(f"yfinance VIX empty, retry {attempt + 1}/{max_retries} in {delay:.0f}s...")
+                time.sleep(delay)
+
+        except Exception as e:
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)
+                log(f"yfinance VIX error: {e}, retry {attempt + 1}/{max_retries} in {delay:.0f}s...")
+                time.sleep(delay)
+            else:
+                log(f"yfinance VIX failed after {max_retries} attempts: {e}")
+
     return None
 
 # round_to_5 is imported from core.gex_strategy
@@ -1795,6 +1822,11 @@ try:
         log(f"⚠️  ZERO position size calculated - account below safety threshold")
         send_discord_skip_alert("Account below 50% of starting capital (safety halt)", run_data)
         raise SystemExit
+
+    # BUGFIX (2026-01-20): Load account balance for order tracking
+    # The autoscaling module loads it internally, but we need it for order_data dict
+    account_balance, _ = load_account_balance()
+    log(f"💰 Account balance: ${account_balance:,.0f}")
 
     log(f"💰 Position size: {position_size} contract(s) @ ${expected_credit:.2f} each = ${expected_credit * position_size * 100:.0f} total premium")
 

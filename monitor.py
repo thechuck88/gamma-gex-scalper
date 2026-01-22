@@ -115,11 +115,35 @@ PROGRESSIVE_TP_SCHEDULE = [
 # ============================================================================
 
 def get_mode():
-    """Detect trading mode from command line args."""
+    """
+    Detect trading mode from GAMMA_TRADING_MODE sentinel file.
+    Falls back to command line args if sentinel unavailable.
+    """
+    # Try reading from sentinel file first
+    try:
+        import sys
+        sys.path.insert(0, '/root/topstocks')
+        from core.trading_mode import get_trading_mode
+
+        mode = get_trading_mode(bot='GAMMA')
+        if mode == 'LIVE':
+            print(f"📋 Gamma Trading Mode: 🔴 LIVE MODE (from sentinel)")
+            return 'REAL'
+        else:  # DEMO
+            print(f"📋 Gamma Trading Mode: 🟢 DEMO MODE (from sentinel)")
+            return 'PAPER'
+    except Exception as e:
+        print(f"WARNING: Could not read GAMMA_TRADING_MODE sentinel: {e}")
+        print("Falling back to command line argument...")
+
+    # Fallback: command line args
     if len(sys.argv) > 1:
         arg = sys.argv[1].upper()
         if arg in ['LIVE', 'REAL']:
+            print(f"📋 Gamma Trading Mode: 🔴 LIVE MODE (from command line)")
             return 'REAL'
+
+    print(f"📋 Gamma Trading Mode: 🟢 PAPER MODE (default)")
     return 'PAPER'
 
 MODE = get_mode()
@@ -1025,9 +1049,10 @@ def check_and_close_positions():
                 if profit_pct >= HOLD_PROFIT_THRESHOLD:
                     # Get current VIX
                     # HIGH-3 FIX (2026-01-13): Log exceptions instead of silently swallowing them
+                    # FIX (2026-01-22): Use VIX symbol (not $VIX.X) for real-time quotes
                     try:
                         vix_quote = requests.get(f"{BASE_URL}/markets/quotes",
-                                               params={"symbols": "$VIX.X"},
+                                               params={"symbols": "VIX"},
                                                headers=HEADERS,
                                                timeout=10).json()
                         current_vix = float(vix_quote.get('quotes', {}).get('quote', {}).get('last', 99))
@@ -1279,9 +1304,200 @@ def get_todays_trades():
 
     return trades
 
+def reconcile_orphaned_positions():
+    """
+    BUGFIX (2026-01-20): Reconcile orphaned positions at startup.
+
+    Checks for option positions in Tradier account that aren't tracked in orders file.
+    Adds them to tracking with emergency stop loss protection.
+
+    This prevents scenarios where scalper crashes after placing order but before
+    writing to tracking file, leaving position without stop loss protection.
+    """
+    log("=" * 70)
+    log("POSITION RECONCILIATION CHECK")
+    log("=" * 70)
+
+    try:
+        # Get current positions from Tradier
+        positions = get_positions()
+        if positions is None:
+            log("⚠️  Could not fetch positions from Tradier - skipping reconciliation")
+            return
+
+        # Filter to option positions only (not underlying stock)
+        option_positions = []
+        for pos in positions:
+            symbol = pos.get('symbol', '')
+            # Option symbols have format like SPXW260120P06850000 or NDXP260120P25150000
+            if symbol and (symbol.startswith('SPXW') or symbol.startswith('NDXP')):
+                option_positions.append(pos)
+
+        if not option_positions:
+            log("✓ No open option positions found in Tradier")
+            return
+
+        log(f"Found {len(option_positions)} open option position(s) in Tradier:")
+        for pos in option_positions:
+            log(f"  - {pos.get('symbol')} qty={pos.get('quantity')}")
+
+        # Load tracked orders
+        tracked_orders = load_orders()
+        tracked_symbols = set()
+        for order in tracked_orders:
+            for sym in order.get('option_symbols', []):
+                tracked_symbols.add(sym)
+
+        log(f"Currently tracking {len(tracked_orders)} order(s) with {len(tracked_symbols)} option legs")
+
+        # Find orphaned positions (in Tradier but not tracked)
+        orphaned = []
+        for pos in option_positions:
+            sym = pos.get('symbol')
+            if sym not in tracked_symbols:
+                orphaned.append(pos)
+
+        if not orphaned:
+            log("✓ All option positions are being tracked - no orphans detected")
+            return
+
+        # CRITICAL: Orphaned positions detected!
+        log("=" * 70)
+        log(f"⚠️  CRITICAL: {len(orphaned)} ORPHANED POSITION(S) DETECTED!")
+        log("=" * 70)
+
+        for pos in orphaned:
+            sym = pos.get('symbol')
+            qty = float(pos.get('quantity', 0))
+            cost = float(pos.get('cost_basis', 0))
+            log(f"  ⚠️  {sym}: qty={qty:.0f}, cost=${abs(cost):.2f}")
+
+        log("")
+        log("These positions were likely created by scalper crash before tracking save.")
+        log("Adding emergency tracking with conservative stop loss...")
+        log("")
+
+        # Group orphaned legs into spreads (2-leg or 4-leg)
+        # For simplicity, assume they're all part of one spread
+        if len(orphaned) == 2 or len(orphaned) == 4:
+            # Create emergency tracking order
+            symbols = [pos.get('symbol') for pos in orphaned]
+            quantities = [float(pos.get('quantity', 0)) for pos in orphaned]
+
+            # Identify shorts (negative quantity) vs longs (positive quantity)
+            short_indices = [i for i, qty in enumerate(quantities) if qty < 0]
+
+            # Estimate entry credit from position costs
+            # For a credit spread: short premium - long premium = credit
+            total_credit = 0.0
+            for i, pos in enumerate(orphaned):
+                qty = abs(float(pos.get('quantity', 0)))
+                cost = abs(float(pos.get('cost_basis', 0)))
+                price_per_contract = cost / (qty * 100) if qty > 0 else 0
+
+                if i in short_indices:
+                    total_credit += price_per_contract  # Short leg adds credit
+                else:
+                    total_credit -= price_per_contract  # Long leg subtracts credit
+
+            total_credit = abs(total_credit)
+
+            # Extract strikes from symbols (e.g., SPXW260120P06850000 -> 6850)
+            strikes = []
+            for sym in symbols:
+                # Last 8 digits are strike * 1000 (e.g., 06850000 = 6850.00)
+                if len(sym) >= 8:
+                    strike_str = sym[-8:]
+                    try:
+                        strike = float(strike_str) / 1000
+                        strikes.append(int(strike))
+                    except:
+                        strikes.append(0)
+
+            # Determine strategy from number of legs
+            if len(orphaned) == 4:
+                strategy = "IC"
+            elif quantities[0] < 0:  # Short first leg
+                # Check if PUT or CALL from symbol
+                if 'P' in symbols[0]:
+                    strategy = "PUT"
+                else:
+                    strategy = "CALL"
+            else:
+                strategy = "SPREAD"
+
+            # Create emergency order tracking
+            emergency_order = {
+                "order_id": f"ORPHAN_{int(time.time())}",
+                "entry_credit": total_credit,
+                "entry_time": datetime.datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S'),
+                "strategy": strategy,
+                "strikes": "/".join(map(str, strikes)),
+                "direction": "UNKNOWN",
+                "confidence": "EMERGENCY",
+                "option_symbols": symbols,
+                "short_indices": short_indices,
+                "tp_price": total_credit * 0.5,  # 50% TP
+                "sl_price": total_credit * 1.15,  # 15% SL
+                "trailing_stop_active": False,
+                "best_profit_pct": 0,
+                "entry_distance": 0,
+                "index_entry": 0,
+                "index_code": "SPX" if symbols[0].startswith('SPXW') else "NDX",
+                "vix_entry": 0,
+                "position_size": int(abs(quantities[0])),
+                "account_balance": 0,
+                "orphan_recovery": True  # Flag for identification
+            }
+
+            # Add to tracking
+            tracked_orders.append(emergency_order)
+            save_orders(tracked_orders)
+
+            log(f"✓ Emergency tracking added for order {emergency_order['order_id']}")
+            log(f"  Strategy: {strategy}")
+            log(f"  Strikes: {'/'.join(map(str, strikes))}")
+            log(f"  Entry Credit (estimated): ${total_credit:.2f}")
+            log(f"  Stop Loss: ${emergency_order['sl_price']:.2f} (15%)")
+            log(f"  Profit Target: ${emergency_order['tp_price']:.2f} (50%)")
+            log("")
+            log("⚠️  STOP LOSS PROTECTION NOW ACTIVE ⚠️")
+
+            # Send Discord alert
+            if DISCORD_ENABLED and DISCORD_WEBHOOK_URL:
+                msg = {
+                    "embeds": [{
+                        "title": "⚠️ ORPHANED POSITION RECOVERED",
+                        "description": f"Found untracked {strategy} spread in Tradier account.\n**Emergency stop loss protection activated.**",
+                        "color": 0xff9900,  # Orange
+                        "fields": [
+                            {"name": "Strikes", "value": "/".join(map(str, strikes)), "inline": True},
+                            {"name": "Entry Credit", "value": f"${total_credit:.2f} (estimated)", "inline": True},
+                            {"name": "Stop Loss", "value": f"${emergency_order['sl_price']:.2f} (15%)", "inline": True},
+                        ],
+                        "footer": {"text": f"{MODE} mode - Orphan recovery activated"},
+                        "timestamp": datetime.datetime.utcnow().isoformat()
+                    }]
+                }
+                _send_to_webhook(DISCORD_WEBHOOK_URL, msg, message_type="crash")
+        else:
+            log(f"⚠️  Cannot auto-recover: Expected 2 or 4 legs, found {len(orphaned)}")
+            log("⚠️  MANUAL INTERVENTION REQUIRED - Close positions manually in Tradier")
+
+    except Exception as e:
+        log(f"Error during position reconciliation: {e}")
+        import traceback
+        traceback.print_exc()
+
+    log("=" * 70)
+    log("")
+
 def main():
     print_startup_banner()
     log("Monitor started — watching for positions...")
+
+    # BUGFIX (2026-01-20): Check for orphaned positions at startup
+    reconcile_orphaned_positions()
 
     daily_summary_sent = False
     heartbeat_counter = 0
