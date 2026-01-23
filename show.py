@@ -812,7 +812,21 @@ def show_closed_trades(days=None, account_mode="PAPER", account_id=None):
                              'Entry_Credit','Confidence','TP%','Exit_Time','Exit_Value',
                              'P/L_$','P/L_%','Exit_Reason','Duration_Min']
                 row = {k: v for k, v in zip(fieldnames, fields)}
-                row['Contracts'] = '10'  # Assume old trades were 10 contracts (default)
+
+                # Calculate actual contracts from P/L (instead of assuming 10)
+                # SPX options: $100 per point
+                try:
+                    entry = float(row['Entry_Credit'])
+                    exit_val = float(row['Exit_Value'])
+                    pl = float(row['P/L_$'].replace('$', '').replace('+', '').replace(',', ''))
+                    credit_diff = entry - exit_val
+                    if credit_diff != 0:
+                        contracts = abs(pl / (credit_diff * 100))
+                        row['Contracts'] = str(int(round(contracts)))
+                    else:
+                        row['Contracts'] = '1'
+                except:
+                    row['Contracts'] = '1'  # Default to 1 if calculation fails
             elif len(fields) == 15:
                 # New format with Contracts field
                 fieldnames = ['Timestamp_ET','Trade_ID','Account_ID','Strategy','Strikes',
@@ -871,21 +885,47 @@ def show_closed_trades(days=None, account_mode="PAPER", account_id=None):
     print(f"  Period: {date_range}")
     print(f"{'='*70}")
 
-    print(f"\n  {'Opened':<14} {'Closed':<14} {'Type':<8} {'Cts':>3} {'Strikes':<18} {'Entry':>6} {'Exit':>6} {'P/L':>8} {'%':>6} {'Dur':>5} {'Reason':<18}")
-    print(f"  {'-'*14} {'-'*14} {'-'*8} {'-'*3} {'-'*18} {'-'*6} {'-'*6} {'-'*8} {'-'*6} {'-'*5} {'-'*18}")
+    print(f"\n  {'Opened':<14} {'Closed':<14} {'Type':<8} {'Strategy':<9} {'Cts':>3} {'Strikes':<35} {'Entry':>6} {'Exit':>6} {'P/L':>8} {'%':>6} {'Dur':>5} {'Reason':<18}")
+    print(f"  {'-'*14} {'-'*14} {'-'*8} {'-'*9} {'-'*3} {'-'*35} {'-'*6} {'-'*6} {'-'*8} {'-'*6} {'-'*5} {'-'*18}")
 
     total_pl = 0
     wins = 0
     losses = 0
 
     for trade in closed_trades:
-        strikes = trade.get('Strikes', 'N/A')[:16]
-        strategy = trade.get('Strategy', 'N/A').upper()[:4]  # PUT, CALL, IC
+        strikes_raw = trade.get('Strikes', 'N/A')
+        strategy_raw = trade.get('Strategy', 'N/A').upper()[:4]  # PUT, CALL, IC
+
+        # Add C or P to each strike based on strategy
+        parts = strikes_raw.split('/')
+        if strategy_raw == 'IC' and len(parts) == 4:
+            # Iron Condor: CALL_HIGH/CALL_LOW/PUT_HIGH/PUT_LOW
+            strikes = f"{parts[0]}C/{parts[1]}C/{parts[2]}P/{parts[3]}P"
+        elif strategy_raw == 'PUT':
+            # PUT spread: both are puts
+            strikes = '/'.join([f"{s}P" for s in parts])
+        elif strategy_raw == 'CALL':
+            # CALL spread: both are calls
+            strikes = '/'.join([f"{s}C" for s in parts])
+        else:
+            strikes = strikes_raw
+
+        strikes = strikes[:35]  # Truncate to field width
+
+        # Map to "GEX PIN" or "FAR OTM"
+        if strategy_raw in ['IC', 'CALL', 'PUT']:
+            strategy_type = "GEX PIN"
+        elif 'OTM' in trade.get('Strategy', ''):
+            strategy_type = "FAR OTM"
+        else:
+            strategy_type = "UNKNOWN"
+
         contracts = trade.get('Contracts', '?')  # Number of contracts
 
         # Determine underlying symbol from strike price
         try:
-            first_strike = float(strikes.split('/')[0])
+            first_strike_str = strikes.split('/')[0].replace('C', '').replace('P', '')
+            first_strike = float(first_strike_str)
             underlying = 'NDX' if first_strike >= 10000 else 'SPX'
         except:
             underlying = '?'
@@ -978,11 +1018,11 @@ def show_closed_trades(days=None, account_mode="PAPER", account_id=None):
             pct_colored = f"{pl_pct:>6}"
 
         # Print with proper alignment (no additional padding for colored fields)
-        type_label = f"{underlying} {strategy}"
-        print(f"  {time_str:<14} {exit_time_str:<14} {type_label:<8} {contracts:>3} {strikes:<18} {entry_str:>6} {exit_str:>6} {pl_colored} {pct_colored} {dur_str:>5} {reason_short:<18}")
+        type_label = f"{underlying} {strategy_raw}"
+        print(f"  {time_str:<14} {exit_time_str:<14} {type_label:<8} {strategy_type:<9} {contracts:>3} {strikes:<35} {entry_str:>6} {exit_str:>6} {pl_colored} {pct_colored} {dur_str:>5} {reason_short:<18}")
 
     # Summary
-    print(f"  {'-'*14} {'-'*14} {'-'*8} {'-'*3} {'-'*18} {'-'*6} {'-'*6} {'-'*8} {'-'*6} {'-'*5} {'-'*18}")
+    print(f"  {'-'*14} {'-'*14} {'-'*8} {'-'*9} {'-'*3} {'-'*35} {'-'*6} {'-'*6} {'-'*8} {'-'*6} {'-'*5} {'-'*18}")
 
     total_trades = wins + losses
     win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
@@ -997,7 +1037,7 @@ def show_closed_trades(days=None, account_mode="PAPER", account_id=None):
     else:
         total_colored = f"${total_pl:>+6.0f}"
 
-    print(f"  {'TOTAL':<14} {summary:<14} {'':>8} {'':>3} {'':>18} {'':>6} {'':>6} {total_colored}")
+    print(f"  {'TOTAL':<14} {summary:<14} {'':>8} {'':>9} {'':>3} {'':>35} {'':>6} {'':>6} {total_colored}")
 
     # Extended stats for multi-day history
     if days and days != 'today':

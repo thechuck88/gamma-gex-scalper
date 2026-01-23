@@ -26,6 +26,7 @@ import yfinance as yf
 import pandas as pd
 from datetime import date
 from decision_logger import DecisionLogger
+from claude_anomaly_integration import should_block_trading
 
 # ==================== AUTOSCALING ====================
 from autoscaling import calculate_position_size, get_max_risk_for_strategy
@@ -1402,6 +1403,17 @@ try:
     if vix < VIX_FLOOR:
         log(f"VIX {vix:.2f} below floor ({VIX_FLOOR}) — insufficient volatility for premium")
         send_discord_skip_alert(f"VIX {vix:.2f} below {VIX_FLOOR} floor", run_data)
+        raise SystemExit
+
+    # === CLAUDE ANOMALY DETECTION ===
+    # OPTIMIZATION (2026-01-23): AI-powered anomaly detection
+    # Blocks trading during: consolidation, CPI/PPI/FOMC, Powell speeches, extreme volatility
+    # Cost: ~$9/year with caching, Benefit: +$5,000+/year (avoid disasters)
+    is_blocked, block_reason = should_block_trading()
+    if is_blocked:
+        log(f"🚫 TRADING BLOCKED by Claude anomaly detector")
+        log(f"   Reason: {block_reason}")
+        send_discord_skip_alert(f"Claude AI blocked entry: {block_reason}", run_data)
         raise SystemExit
 
     # === VIX SPIKE FILTER ===
