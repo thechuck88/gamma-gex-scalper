@@ -116,12 +116,24 @@ PROGRESSIVE_TP_SCHEDULE = [
 
 def get_mode():
     """
-    Detect trading mode from GAMMA_TRADING_MODE sentinel file.
-    Falls back to command line args if sentinel unavailable.
+    Detect trading mode from command line args first, then sentinel file.
+    BUGFIX (2026-01-24): Prioritize explicit command line args over sentinel
+    to allow running both LIVE and PAPER bots simultaneously.
     """
-    # Try reading from sentinel file first
+    import sys
+
+    # PRIORITY 1: Explicit command line argument (highest priority)
+    if len(sys.argv) > 1:
+        arg = sys.argv[1].upper()
+        if arg in ['LIVE', 'REAL']:
+            print(f"📋 Gamma Trading Mode: 🔴 LIVE MODE (explicit arg)")
+            return 'REAL'
+        elif arg in ['PAPER', 'DEMO']:
+            print(f"📋 Gamma Trading Mode: 🟢 PAPER MODE (explicit arg)")
+            return 'PAPER'
+
+    # PRIORITY 2: Sentinel file (fallback)
     try:
-        import sys
         sys.path.insert(0, '/root/topstocks')
         from core.trading_mode import get_trading_mode
 
@@ -134,15 +146,8 @@ def get_mode():
             return 'PAPER'
     except Exception as e:
         print(f"WARNING: Could not read GAMMA_TRADING_MODE sentinel: {e}")
-        print("Falling back to command line argument...")
 
-    # Fallback: command line args
-    if len(sys.argv) > 1:
-        arg = sys.argv[1].upper()
-        if arg in ['LIVE', 'REAL']:
-            print(f"📋 Gamma Trading Mode: 🔴 LIVE MODE (from command line)")
-            return 'REAL'
-
+    # PRIORITY 3: Default to PAPER (safest)
     print(f"📋 Gamma Trading Mode: 🟢 PAPER MODE (default)")
     return 'PAPER'
 
