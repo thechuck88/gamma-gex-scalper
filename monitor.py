@@ -93,6 +93,7 @@ TRAILING_TIGHTEN_RATE = 0.4     # How fast it tightens (0.4 = every 2.5% gain, t
 # Stop loss grace period - let positions settle before triggering SL
 SL_GRACE_PERIOD_SEC = 540       # OPTIMIZATION #2: 9 minutes grace (allows 0DTE to work through initial gamma volatility)
 SL_EMERGENCY_PCT = 0.25         # OPTIMIZATION: Emergency stop at 25% (was 40%) - tighter risk control
+SL_ENTRY_SETTLE_SEC = 60        # FIX #3 (2026-02-04): Entry settle period - wait 60s before emergency stop can trigger
 
 # Progressive hold-to-expiration settings (2026-01-10)
 PROGRESSIVE_HOLD_ENABLED = True   # Enable progressive hold strategy
@@ -1119,9 +1120,29 @@ def check_and_close_positions():
         if is_otm_strategy:
             # If profit >= 70%, hold to expiration (only exit on emergency stop)
             if profit_pct >= 0.70:
-                # Check emergency stop only
+                # Check emergency stop only (with settle period protection)
                 if profit_pct_sl <= -SL_EMERGENCY_PCT:
-                    exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
+                    # FIX #3: Calculate position age for settle period
+                    try:
+                        if 'T' in entry_time and ('+' in entry_time or 'Z' in entry_time):
+                            entry_dt = datetime.datetime.fromisoformat(entry_time.replace('Z', '+00:00'))
+                            entry_dt = entry_dt.astimezone(ET)
+                        else:
+                            entry_dt = datetime.datetime.strptime(entry_time, '%Y-%m-%d %H:%M:%S')
+                            entry_dt = ET.localize(entry_dt)
+                        position_age_sec = (now - entry_dt).total_seconds()
+                    except (ValueError, TypeError, AttributeError) as e:
+                        log(f"Error parsing entry time for settle check: {e}")
+                        position_age_sec = 9999  # Default to old position
+
+                    # Skip emergency stop during settle period
+                    if position_age_sec < SL_ENTRY_SETTLE_SEC:
+                        settle_remaining = SL_ENTRY_SETTLE_SEC - position_age_sec
+                        log(f"  ⏳ EMERGENCY stop triggered but position just entered "
+                            f"({position_age_sec:.0f}s ago, settle period: {settle_remaining:.0f}s remaining)")
+                        log(f"     Current loss: {profit_pct_sl*100:.0f}% (allowing quotes to settle)")
+                    else:
+                        exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
                 # Check expiration
                 elif now.hour >= 16:
                     current_value = 0.0
@@ -1133,9 +1154,27 @@ def check_and_close_positions():
                 # Exit if drops below 50% locked-in level
                 if profit_pct < 0.50:
                     exit_reason = f"OTM 50% Lock-In Stop (from peak {best_profit_pct*100:.0f}%)"
-                # Check emergency stop
+                # Check emergency stop (with settle period protection)
                 elif profit_pct_sl <= -SL_EMERGENCY_PCT:
-                    exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
+                    # FIX #3: Calculate position age for settle period
+                    try:
+                        if 'T' in entry_time and ('+' in entry_time or 'Z' in entry_time):
+                            entry_dt = datetime.datetime.fromisoformat(entry_time.replace('Z', '+00:00'))
+                            entry_dt = entry_dt.astimezone(ET)
+                        else:
+                            entry_dt = datetime.datetime.strptime(entry_time, '%Y-%m-%d %H:%M:%S')
+                            entry_dt = ET.localize(entry_dt)
+                        position_age_sec = (now - entry_dt).total_seconds()
+                    except (ValueError, TypeError, AttributeError) as e:
+                        log(f"Error parsing entry time for settle check: {e}")
+                        position_age_sec = 9999
+
+                    if position_age_sec < SL_ENTRY_SETTLE_SEC:
+                        settle_remaining = SL_ENTRY_SETTLE_SEC - position_age_sec
+                        log(f"  ⏳ EMERGENCY stop triggered but position just entered "
+                            f"({position_age_sec:.0f}s ago, settle: {settle_remaining:.0f}s remaining)")
+                    else:
+                        exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
                 # Check expiration
                 elif now.hour >= 16:
                     current_value = 0.0
@@ -1156,9 +1195,15 @@ def check_and_close_positions():
                     log(f"Error parsing entry time '{entry_time}' for SL check: {e}")
                     position_age_sec = 9999
 
-                # Check stop losses
+                # Check stop losses (FIX #3: Emergency stop respects settle period)
                 if profit_pct_sl <= -SL_EMERGENCY_PCT:
-                    exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
+                    # Skip emergency stop during settle period
+                    if position_age_sec < SL_ENTRY_SETTLE_SEC:
+                        settle_remaining = SL_ENTRY_SETTLE_SEC - position_age_sec
+                        log(f"  ⏳ EMERGENCY stop triggered but position just entered "
+                            f"({position_age_sec:.0f}s ago, settle: {settle_remaining:.0f}s remaining)")
+                    else:
+                        exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
                 elif profit_pct_sl <= -STOP_LOSS_PCT and position_age_sec >= SL_GRACE_PERIOD_SEC:
                     exit_reason = f"Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
                 elif profit_pct_sl <= -STOP_LOSS_PCT:
@@ -1212,9 +1257,15 @@ def check_and_close_positions():
                 log(f"Error parsing entry time '{entry_time}' for SL check: {e}")
                 position_age_sec = 9999  # If can't parse, assume old enough
 
-            # Emergency stop - trigger immediately regardless of age
+            # Emergency stop - FIX #3: Respect settle period to avoid false alarms
             if profit_pct_sl <= -SL_EMERGENCY_PCT:
-                exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
+                if position_age_sec < SL_ENTRY_SETTLE_SEC:
+                    settle_remaining = SL_ENTRY_SETTLE_SEC - position_age_sec
+                    log(f"  ⏳ EMERGENCY stop triggered but position just entered "
+                        f"({position_age_sec:.0f}s ago, settle: {settle_remaining:.0f}s remaining)")
+                    log(f"     Current loss: {profit_pct_sl*100:.0f}% (allowing quotes to settle)")
+                else:
+                    exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
             # Normal stop loss - only after grace period
             elif position_age_sec >= SL_GRACE_PERIOD_SEC:
                 exit_reason = f"Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"

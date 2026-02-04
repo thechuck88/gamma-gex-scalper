@@ -1006,16 +1006,17 @@ def get_expected_credit(short_sym, long_sym):
 
 def check_spread_quality(short_sym, long_sym, expected_credit):
     """
-    FIX #4: Check if bid/ask spread is tight enough for safe entry.
+    FIX #1 ENHANCED (2026-02-04): Progressive spread tolerance based on credit size.
 
     Returns True if spread is acceptable, False if too wide.
 
     Logic:
     - Calculate net spread: (short_ask - short_bid) - (long_ask - long_bid)
-    - If net spread > 25% of expected credit, too risky
-    - Example: $2.00 credit → max $0.50 net spread
+    - Progressive tolerance: Smaller credits = stricter tolerance
+    - Prevents instant stops from entry slippage
 
-    Prevents instant stops from entry slippage.
+    Enhancement: Small credits (<$1.50) get tighter tolerance to prevent
+    instant emergency stops from slippage.
     """
     try:
         symbols = f"{short_sym},{long_sym}"
@@ -1053,11 +1054,25 @@ def check_spread_quality(short_sym, long_sym, expected_credit):
         net_spread = short_spread - long_spread  # Short spread costs us, long spread saves us
         net_spread = abs(net_spread)  # Take absolute value
 
-        # Maximum acceptable spread: Use index-specific tolerance (SPX 25%, NDX 30%)
-        max_spread = expected_credit * INDEX_CONFIG.max_spread_pct
+        # FIX #1: Progressive tolerance based on credit size
+        if expected_credit < 1.00:
+            max_spread_pct = 0.12  # 12% for very small credits (strict)
+            reasoning = "very small credit (<$1.00)"
+        elif expected_credit < 1.50:
+            max_spread_pct = 0.15  # 15% for small credits (tight)
+            reasoning = "small credit (<$1.50)"
+        elif expected_credit < 2.50:
+            max_spread_pct = 0.20  # 20% for medium credits (moderate)
+            reasoning = "medium credit (<$2.50)"
+        else:
+            max_spread_pct = INDEX_CONFIG.max_spread_pct  # Use index default for large credits
+            reasoning = f"large credit (>=$2.50, using {INDEX_CONFIG.code} default)"
+
+        max_spread = expected_credit * max_spread_pct
 
         log(f"Spread quality: short {short_spread:.2f}, long {long_spread:.2f}, net {net_spread:.2f}")
-        log(f"Max acceptable spread: ${max_spread:.2f} ({INDEX_CONFIG.max_spread_pct*100:.0f}% of ${expected_credit:.2f} credit)")
+        log(f"Credit: ${expected_credit:.2f} ({reasoning})")
+        log(f"Max acceptable spread: ${max_spread:.2f} ({max_spread_pct*100:.0f}% tolerance)")
 
         if net_spread > max_spread:
             log(f"❌ Spread too wide: ${net_spread:.2f} > ${max_spread:.2f} (instant slippage would trigger emergency stop)")
@@ -1069,6 +1084,128 @@ def check_spread_quality(short_sym, long_sym, expected_credit):
     except Exception as e:
         log(f"Error checking spread quality: {e}")
         return True  # Don't block trade on error
+
+def check_credit_safety_buffer(expected_credit, emergency_stop_pct=0.25):
+    """
+    FIX #2 (2026-02-04): Verify credit provides adequate buffer above emergency stop threshold.
+
+    Problem: Credits < $1.50 have almost no room for slippage.
+    Solution: Require buffer that covers emergency stop + safety margin.
+
+    Args:
+        expected_credit: Expected credit from spread
+        emergency_stop_pct: Emergency stop threshold (default 0.25 = 25%)
+
+    Returns:
+        (is_safe, reason)
+    """
+    # Absolute minimum credit (below this, emergency stop too tight)
+    ABSOLUTE_MIN_CREDIT = 1.00
+
+    if expected_credit < ABSOLUTE_MIN_CREDIT:
+        reason = (f"Credit ${expected_credit:.2f} below absolute minimum "
+                 f"${ABSOLUTE_MIN_CREDIT:.2f} (emergency stop would be "
+                 f"${expected_credit * emergency_stop_pct:.2f}, too tight for 0DTE volatility)")
+        return False, reason
+
+    # For small credits, require adequate buffer after emergency stop
+    if expected_credit < 1.50:
+        emergency_threshold = expected_credit * emergency_stop_pct
+        remaining_after_stop = expected_credit - emergency_threshold
+
+        # Require at least $0.15 remaining after emergency stop
+        # (Covers slippage, spread, market noise)
+        min_remaining = 0.15
+
+        if remaining_after_stop < min_remaining:
+            reason = (f"Credit ${expected_credit:.2f} too small - "
+                     f"after 25% emergency stop (${emergency_threshold:.2f}), "
+                     f"only ${remaining_after_stop:.2f} buffer remains "
+                     f"(need ${min_remaining:.2f} for slippage/noise)")
+            return False, reason
+
+    # Large credits (>= $1.50) are safe
+    return True, f"Credit ${expected_credit:.2f} provides adequate safety buffer"
+
+def check_market_momentum(index_price, index_symbol='SPX', lookback_minutes=5):
+    """
+    FIX #4 (2026-02-04): Block entries if market has moved significantly in recent minutes.
+
+    Large moves indicate:
+    - High volatility → wide spreads
+    - Directional momentum → likely to continue
+    - Fast-moving market → poor fill quality
+
+    Args:
+        index_price: Current index price (SPX or NDX)
+        index_symbol: Index ticker ('^GSPC' for SPX, '^NDX' for NDX)
+        lookback_minutes: How far back to check (default 5 minutes)
+
+    Returns:
+        (is_safe, reason)
+    """
+    try:
+        import yfinance as yf
+        from datetime import timedelta
+
+        # Map index symbol to yfinance ticker
+        ticker_map = {
+            'SPX': '^GSPC',
+            'NDX': '^NDX',
+            'DJX': '^DJI'
+        }
+        ticker_symbol = ticker_map.get(index_symbol, '^GSPC')
+
+        # Fetch recent 1-minute bars
+        ticker = yf.Ticker(ticker_symbol)
+        now = datetime.datetime.now()
+        end = now
+        start = now - timedelta(minutes=lookback_minutes + 2)  # Extra buffer
+
+        # Get 1-minute data
+        df = ticker.history(start=start, end=end, interval="1m")
+
+        if df.empty or len(df) < 2:
+            log(f"Warning: Could not fetch {index_symbol} history for momentum check")
+            return True, "Momentum check unavailable (allow trade)"
+
+        # Get price from 5 minutes ago
+        if len(df) >= lookback_minutes:
+            price_5min_ago = df.iloc[-lookback_minutes]['Close']
+        else:
+            price_5min_ago = df.iloc[0]['Close']
+
+        change_5m = abs(index_price - price_5min_ago)
+
+        # Threshold: 10 points for SPX, scale for other indices
+        threshold_5m = 10.0 if index_symbol == 'SPX' else 50.0
+
+        if change_5m > threshold_5m:
+            reason = (f"{index_symbol} moved {change_5m:.1f} pts in {lookback_minutes}min "
+                     f"(threshold: {threshold_5m:.0f} pts) - market too fast")
+            log(f"❌ {reason}")
+            return False, reason
+
+        # Also check 1-minute spike
+        if len(df) >= 2:
+            price_1min_ago = df.iloc[-2]['Close']
+            change_1m = abs(index_price - price_1min_ago)
+
+            threshold_1m = 5.0 if index_symbol == 'SPX' else 25.0
+
+            if change_1m > threshold_1m:
+                reason = (f"{index_symbol} moved {change_1m:.1f} pts in 1min "
+                         f"(threshold: {threshold_1m:.0f} pts) - spike detected")
+                log(f"❌ {reason}")
+                return False, reason
+
+        log(f"✅ Market momentum acceptable: 5m change {change_5m:.1f} pts, "
+            f"1m change {change_1m:.1f} pts")
+        return True, "Market momentum acceptable"
+
+    except Exception as e:
+        log(f"Warning: Market momentum check failed: {e}")
+        return True, "Momentum check failed (allow trade)"
 
 def is_in_blackout_period(now_et):
     """
@@ -1771,6 +1908,22 @@ try:
         log(f"Credit ${expected_credit:.2f} below minimum ${min_credit:.2f} for {now_et.strftime('%H:%M')} ET ({INDEX_CONFIG.code}) — NO TRADE")
         send_discord_skip_alert(f"Credit ${expected_credit:.2f} below ${min_credit:.2f} minimum for {now_et.strftime('%H:%M')} ET ({INDEX_CONFIG.code})", run_data)
         raise SystemExit
+
+    # FIX #2: Credit safety buffer check (emergency stop protection)
+    is_safe, buffer_reason = check_credit_safety_buffer(expected_credit)
+    if not is_safe:
+        log(f"❌ {buffer_reason} — NO TRADE")
+        send_discord_skip_alert(f"Credit safety: {buffer_reason}", run_data)
+        raise SystemExit
+    log(f"✅ {buffer_reason}")
+
+    # FIX #4: Market momentum filter (avoid fast-moving markets)
+    is_safe, momentum_reason = check_market_momentum(index_price, INDEX_CONFIG.index_symbol)
+    if not is_safe:
+        log(f"❌ {momentum_reason} — NO TRADE")
+        send_discord_skip_alert(f"Market momentum: {momentum_reason}", run_data)
+        raise SystemExit
+    log(f"✅ {momentum_reason}")
 
     dollar_credit = expected_credit * 100
     # OPTIMIZATION #3: MEDIUM confidence 60% TP (was 70%) - captures profit before reversals
