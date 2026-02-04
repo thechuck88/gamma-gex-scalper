@@ -95,6 +95,12 @@ SL_GRACE_PERIOD_SEC = 540       # OPTIMIZATION #2: 9 minutes grace (allows 0DTE 
 SL_EMERGENCY_PCT = 0.25         # OPTIMIZATION: Emergency stop at 25% (was 40%) - tighter risk control
 SL_ENTRY_SETTLE_SEC = 60        # FIX #3 (2026-02-04): Entry settle period - wait 60s before emergency stop can trigger
 
+# Smart settle period - early exit conditions (FIX #4: 2026-02-04)
+SL_SETTLE_SPREAD_NORMALIZED = 0.15    # Override if spread < 15%
+SL_SETTLE_QUOTE_STABLE_SEC = 10       # Override if quote stable for 10s
+SL_SETTLE_CATASTROPHIC_PCT = 0.35     # Override if loss > 35%
+SL_SETTLE_QUOTE_CHANGE_THRESHOLD = 0.05  # Quote unchanged if within 5 cents
+
 # Progressive hold-to-expiration settings (2026-01-10)
 PROGRESSIVE_HOLD_ENABLED = True   # Enable progressive hold strategy
 HOLD_PROFIT_THRESHOLD = 0.80      # Must reach 80% profit to qualify for hold
@@ -914,6 +920,75 @@ def update_trade_log(order_id, exit_value, exit_reason, entry_credit, entry_time
 #                           MONITOR LOGIC
 # ============================================================================
 
+def should_override_settle_period(entry_credit, current_value, bid_value, ask_value,
+                                  profit_pct_sl, order, position_age_sec):
+    """
+    FIX #4 (2026-02-04): Smart settle period - override early exit conditions.
+
+    Check if settle period should be overridden to allow emergency stop.
+    Instead of blindly waiting 60 seconds, exit early if:
+    1. Bid-ask spread normalized (< 15%)
+    2. Quote stable for 10+ seconds (no significant change)
+    3. Catastrophic loss (< -35%)
+
+    Args:
+        entry_credit: Entry credit received
+        current_value: Current mid price
+        bid_value: Current bid price
+        ask_value: Current ask price
+        profit_pct_sl: Current P&L percentage (stop loss calc)
+        order: Order dictionary with tracking data
+        position_age_sec: Seconds since position entry
+
+    Returns:
+        (should_override, reason) - tuple of bool and string
+    """
+    now = datetime.datetime.now(ET)
+
+    # Condition 1: Bid-ask spread normalized (tight spread = reliable quote)
+    if bid_value > 0 and ask_value > 0:
+        mid_price = (ask_value + bid_value) / 2
+        if mid_price > 0:
+            spread_pct = (ask_value - bid_value) / mid_price
+            if spread_pct < SL_SETTLE_SPREAD_NORMALIZED:
+                return True, f"spread normalized ({spread_pct*100:.1f}%)"
+
+    # Condition 2: Quote stability (no movement = position settled)
+    # Track last quote and timestamp in order dict
+    last_quote_value = order.get('last_quote_value')
+    last_quote_time_str = order.get('last_quote_time')
+
+    if last_quote_value is not None and last_quote_time_str is not None:
+        try:
+            # Parse ISO format timestamp back to datetime
+            last_quote_time = datetime.datetime.fromisoformat(last_quote_time_str)
+            if last_quote_time.tzinfo is None:
+                # Assume ET if no timezone
+                last_quote_time = ET.localize(last_quote_time)
+            else:
+                # Convert to ET
+                last_quote_time = last_quote_time.astimezone(ET)
+
+            # Check if quote changed significantly
+            quote_change = abs(current_value - last_quote_value)
+            quote_unchanged = quote_change < SL_SETTLE_QUOTE_CHANGE_THRESHOLD
+
+            # Calculate time since last quote change
+            time_unchanged = (now - last_quote_time).total_seconds()
+
+            if quote_unchanged and time_unchanged >= SL_SETTLE_QUOTE_STABLE_SEC:
+                return True, f"quotes stable for {time_unchanged:.0f}s"
+        except (ValueError, TypeError, AttributeError) as e:
+            # If parsing fails, skip this check
+            pass
+
+    # Condition 3: Catastrophic loss (override for extreme moves)
+    if profit_pct_sl <= -SL_SETTLE_CATASTROPHIC_PCT:
+        return True, f"catastrophic loss ({profit_pct_sl*100:.0f}%)"
+
+    # No override conditions met
+    return False, ""
+
 def check_and_close_positions():
     """
     Main monitoring logic:
@@ -1005,6 +1080,14 @@ def check_and_close_positions():
         if profit_pct > best_profit_pct:
             order['best_profit_pct'] = profit_pct
             best_profit_pct = profit_pct
+            orders_modified = True
+
+        # FIX #4 (2026-02-04): Track quote stability for smart settle period
+        last_quote = order.get('last_quote_value')
+        if last_quote is None or abs(current_value - last_quote) >= SL_SETTLE_QUOTE_CHANGE_THRESHOLD:
+            # Quote changed significantly - reset tracking
+            order['last_quote_value'] = current_value
+            order['last_quote_time'] = now.isoformat()  # Store as ISO string for JSON serialization
             orders_modified = True
 
         # Check if trailing stop should activate
@@ -1135,14 +1218,19 @@ def check_and_close_positions():
                         log(f"Error parsing entry time for settle check: {e}")
                         position_age_sec = 9999  # Default to old position
 
-                    # Skip emergency stop during settle period
-                    if position_age_sec < SL_ENTRY_SETTLE_SEC:
+                    # FIX #4 (2026-02-04): Smart settle period with early exit conditions
+                    should_override, override_reason = should_override_settle_period(
+                        entry_credit, current_value, bid_value, ask_value,
+                        profit_pct_sl, order, position_age_sec)
+
+                    if position_age_sec < SL_ENTRY_SETTLE_SEC and not should_override:
                         settle_remaining = SL_ENTRY_SETTLE_SEC - position_age_sec
                         log(f"  ⏳ EMERGENCY stop triggered but position just entered "
-                            f"({position_age_sec:.0f}s ago, settle period: {settle_remaining:.0f}s remaining)")
+                            f"({position_age_sec:.0f}s ago, settle: {settle_remaining:.0f}s remaining)")
                         log(f"     Current loss: {profit_pct_sl*100:.0f}% (allowing quotes to settle)")
                     else:
-                        exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
+                        override_msg = f" [override: {override_reason}]" if should_override else ""
+                        exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case){override_msg}"
                 # Check expiration
                 elif now.hour >= 16:
                     current_value = 0.0
@@ -1169,12 +1257,18 @@ def check_and_close_positions():
                         log(f"Error parsing entry time for settle check: {e}")
                         position_age_sec = 9999
 
-                    if position_age_sec < SL_ENTRY_SETTLE_SEC:
+                    # FIX #4 (2026-02-04): Smart settle period with early exit conditions
+                    should_override, override_reason = should_override_settle_period(
+                        entry_credit, current_value, bid_value, ask_value,
+                        profit_pct_sl, order, position_age_sec)
+
+                    if position_age_sec < SL_ENTRY_SETTLE_SEC and not should_override:
                         settle_remaining = SL_ENTRY_SETTLE_SEC - position_age_sec
                         log(f"  ⏳ EMERGENCY stop triggered but position just entered "
                             f"({position_age_sec:.0f}s ago, settle: {settle_remaining:.0f}s remaining)")
                     else:
-                        exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
+                        override_msg = f" [override: {override_reason}]" if should_override else ""
+                        exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case){override_msg}"
                 # Check expiration
                 elif now.hour >= 16:
                     current_value = 0.0
@@ -1198,12 +1292,18 @@ def check_and_close_positions():
                 # Check stop losses (FIX #3: Emergency stop respects settle period)
                 if profit_pct_sl <= -SL_EMERGENCY_PCT:
                     # Skip emergency stop during settle period
-                    if position_age_sec < SL_ENTRY_SETTLE_SEC:
+                    # FIX #4 (2026-02-04): Smart settle period with early exit conditions
+                    should_override, override_reason = should_override_settle_period(
+                        entry_credit, current_value, bid_value, ask_value,
+                        profit_pct_sl, order, position_age_sec)
+
+                    if position_age_sec < SL_ENTRY_SETTLE_SEC and not should_override:
                         settle_remaining = SL_ENTRY_SETTLE_SEC - position_age_sec
                         log(f"  ⏳ EMERGENCY stop triggered but position just entered "
                             f"({position_age_sec:.0f}s ago, settle: {settle_remaining:.0f}s remaining)")
                     else:
-                        exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
+                        override_msg = f" [override: {override_reason}]" if should_override else ""
+                        exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case){override_msg}"
                 elif profit_pct_sl <= -STOP_LOSS_PCT and position_age_sec >= SL_GRACE_PERIOD_SEC:
                     exit_reason = f"Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
                 elif profit_pct_sl <= -STOP_LOSS_PCT:
@@ -1257,15 +1357,20 @@ def check_and_close_positions():
                 log(f"Error parsing entry time '{entry_time}' for SL check: {e}")
                 position_age_sec = 9999  # If can't parse, assume old enough
 
-            # Emergency stop - FIX #3: Respect settle period to avoid false alarms
+            # Emergency stop - FIX #4 (2026-02-04): Smart settle period with early exit
             if profit_pct_sl <= -SL_EMERGENCY_PCT:
-                if position_age_sec < SL_ENTRY_SETTLE_SEC:
+                should_override, override_reason = should_override_settle_period(
+                    entry_credit, current_value, bid_value, ask_value,
+                    profit_pct_sl, order, position_age_sec)
+
+                if position_age_sec < SL_ENTRY_SETTLE_SEC and not should_override:
                     settle_remaining = SL_ENTRY_SETTLE_SEC - position_age_sec
                     log(f"  ⏳ EMERGENCY stop triggered but position just entered "
                         f"({position_age_sec:.0f}s ago, settle: {settle_remaining:.0f}s remaining)")
                     log(f"     Current loss: {profit_pct_sl*100:.0f}% (allowing quotes to settle)")
                 else:
-                    exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
+                    override_msg = f" [override: {override_reason}]" if should_override else ""
+                    exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case){override_msg}"
             # Normal stop loss - only after grace period
             elif position_age_sec >= SL_GRACE_PERIOD_SEC:
                 exit_reason = f"Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
