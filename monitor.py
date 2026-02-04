@@ -495,11 +495,95 @@ def add_order(order_data):
     save_orders(orders)
     log(f"Added order {order_data['order_id']} to tracking")
 
-def remove_order(order_id):
-    """Remove an order from tracking."""
+def verify_position_closed_at_broker(order_data):
+    """
+    Verify that a position is actually closed at Tradier (not just tracking removed).
+
+    CRITICAL SAFETY (2026-02-04): Prevents silent position abandonment.
+    Returns True ONLY if Tradier confirms the position no longer exists.
+
+    Args:
+        order_data: Order dict with option_symbols
+
+    Returns:
+        bool: True if position is confirmed closed, False if still open or error
+    """
+    try:
+        symbols = order_data.get('option_symbols', [])
+        if not symbols:
+            log(f"⚠️  Cannot verify closure: no symbols in order data")
+            return False
+
+        # Query Tradier positions
+        r = requests.get(
+            f"{BASE_URL}/accounts/{TRADIER_ACCOUNT_ID}/positions",
+            headers=HEADERS,
+            timeout=10
+        )
+
+        if r.status_code != 200:
+            log(f"⚠️  Cannot verify closure: API error HTTP {r.status_code}")
+            return False
+
+        data = r.json()
+        positions = data.get('positions')
+
+        # No positions at all = definitely closed
+        if not positions or positions == 'null':
+            return True
+
+        position_list = positions.get('position', [])
+        if not isinstance(position_list, list):
+            position_list = [position_list]
+
+        # Check if any of our symbols still exist in positions
+        open_symbols = [p.get('symbol') for p in position_list]
+
+        for symbol in symbols:
+            if symbol in open_symbols:
+                log(f"⚠️  Position still OPEN at broker: {symbol}")
+                return False
+
+        # All symbols confirmed closed
+        return True
+
+    except Exception as e:
+        log(f"⚠️  Error verifying closure: {e}")
+        return False
+
+def remove_order(order_id, verified_closed_at_broker=False, reason="unknown"):
+    """
+    Remove an order from tracking.
+
+    CRITICAL SAFETY (2026-02-04): Positions should ONLY be removed after verifying
+    they're actually closed at the broker. Silent removals caused $1,822 loss.
+
+    Args:
+        order_id: Order ID to remove
+        verified_closed_at_broker: MUST be True to remove (safety check)
+        reason: Why this position is being removed (for logging)
+    """
+    if not verified_closed_at_broker:
+        log(f"🚨 CRITICAL: Attempted to remove order {order_id} WITHOUT broker verification!")
+        log(f"   Reason: {reason}")
+        log(f"   This is BLOCKED to prevent silent position abandonment.")
+        log(f"   Use verified_closed_at_broker=True ONLY after confirming closure at Tradier.")
+        return False
+
     orders = load_orders()
+    original_count = len(orders)
     orders = [o for o in orders if o.get('order_id') != order_id]
-    save_orders(orders)
+
+    if len(orders) < original_count:
+        save_orders(orders)
+        log(f"🗑️  POSITION REMOVED FROM TRACKING: {order_id}")
+        log(f"   ✅ Verified closed at broker: YES")
+        log(f"   Reason: {reason}")
+        log(f"   Remaining positions: {len(orders)}")
+        return True
+    else:
+        log(f"⚠️  Order {order_id} not found in tracking (already removed?)")
+        return False
 
 # ============================================================================
 #                           MARKET HOURS VALIDATION
@@ -1397,8 +1481,24 @@ def check_and_close_positions():
                 strategy = order.get('strategy', 'SPREAD')
                 strikes = order.get('strikes', 'N/A')
                 send_discord_exit_alert(order_id, strategy, strikes, entry_credit, current_value, exit_reason, profit_pct)
-                remove_order(order_id)
-                log(f"Position {order_id} closed and removed from tracking")
+
+                # CRITICAL SAFETY (2026-02-04): Verify position actually closed before removing
+                # Silent removal without verification caused $1,822 loss
+                log(f"Verifying position {order_id} actually closed at broker...")
+                import time
+                time.sleep(2)  # Give broker 2 seconds to process close
+
+                verified = verify_position_closed_at_broker(order)
+                if verified:
+                    remove_order(order_id, verified_closed_at_broker=True, reason=exit_reason)
+                    log(f"Position {order_id} closed and removed from tracking")
+                else:
+                    log(f"⚠️  Position {order_id} NOT VERIFIED closed at broker")
+                    log(f"   Keeping in tracking for safety (will retry reconciliation)")
+                    # Mark as pending closure
+                    order['pending_closure'] = True
+                    order['closure_attempt_time'] = now.isoformat()
+                    orders_modified = True
             else:
                 log(f"Failed to close {order_id} — will retry")
 
@@ -1464,6 +1564,91 @@ def get_todays_trades():
         log(f"Error reading trade log: {e}")
 
     return trades
+
+def reconcile_positions_with_broker():
+    """
+    CRITICAL SAFETY (2026-02-04): Reconcile tracking with actual broker positions.
+
+    Runs every 5 minutes to catch:
+    1. Positions open at broker but not tracked (orphaned) - ADD TO TRACKING
+    2. Positions tracked but closed at broker (stale) - REMOVE FROM TRACKING
+    3. Positions marked "pending_closure" - RETRY VERIFICATION
+
+    This prevents the $1,822 loss scenario where positions were silently abandoned.
+    """
+    log(f"🔄 RECONCILIATION: Verifying tracking matches broker reality...")
+
+    try:
+        # Get actual positions from Tradier
+        r = requests.get(
+            f"{BASE_URL}/accounts/{TRADIER_ACCOUNT_ID}/positions",
+            headers=HEADERS,
+            timeout=10
+        )
+
+        if r.status_code != 200:
+            log(f"⚠️  Reconciliation failed: API error HTTP {r.status_code}")
+            return
+
+        data = r.json()
+        positions = data.get('positions')
+
+        broker_positions = []
+        if positions and positions != 'null':
+            position_list = positions.get('position', [])
+            if not isinstance(position_list, list):
+                position_list = [position_list]
+            broker_positions = position_list
+
+        broker_symbols = set(p.get('symbol') for p in broker_positions)
+
+        # Get tracked positions
+        orders = load_orders()
+        tracked_symbols = set()
+        for order in orders:
+            symbols = order.get('option_symbols', [])
+            tracked_symbols.update(symbols)
+
+        # Check for orphaned positions (at broker but not tracked)
+        orphaned = broker_symbols - tracked_symbols
+        if orphaned:
+            log(f"🚨 CRITICAL: Found {len(orphaned)} ORPHANED positions at broker!")
+            for symbol in orphaned:
+                log(f"   - {symbol} (open at broker, NOT TRACKED)")
+            log(f"   These positions have NO STOP LOSS PROTECTION!")
+            log(f"   Manual intervention required or add orphan auto-tracking")
+
+        # Check for stale tracking (tracked but closed at broker)
+        orders_modified = False
+        for order in orders[:]:
+            order_symbols = set(order.get('option_symbols', []))
+            still_open = order_symbols & broker_symbols
+
+            if not still_open:
+                # Position is tracked but closed at broker
+                order_id = order.get('order_id')
+                log(f"✅ Position {order_id} verified CLOSED at broker (cleaning stale tracking)")
+                remove_order(order_id, verified_closed_at_broker=True, reason="reconciliation_cleanup")
+                orders_modified = True
+
+            # Check pending closures
+            if order.get('pending_closure'):
+                order_id = order.get('order_id')
+                log(f"🔄 Retrying verification for pending closure: {order_id}")
+                verified = verify_position_closed_at_broker(order)
+                if verified:
+                    remove_order(order_id, verified_closed_at_broker=True, reason="pending_closure_verified")
+                    orders_modified = True
+                else:
+                    log(f"⚠️  Position {order_id} still open at broker after close attempt")
+
+        if not orphaned and not orders_modified:
+            log(f"✅ Reconciliation complete: tracking matches broker ({len(broker_positions)} positions)")
+
+    except Exception as e:
+        log(f"⚠️  Reconciliation error: {e}")
+        import traceback
+        traceback.print_exc()
 
 def reconcile_orphaned_positions():
     """
@@ -1662,7 +1847,9 @@ def main():
 
     daily_summary_sent = False
     heartbeat_counter = 0
+    reconciliation_counter = 0
     HEARTBEAT_INTERVAL = 100  # Send heartbeat every 100 cycles (5 min at 3s poll)
+    RECONCILIATION_INTERVAL = 100  # Reconcile every 100 cycles (5 min at 3s poll)
 
     while True:
         try:
@@ -1673,6 +1860,13 @@ def main():
             if heartbeat_counter >= HEARTBEAT_INTERVAL:
                 send_heartbeat()
                 heartbeat_counter = 0
+
+            # CRITICAL SAFETY (2026-02-04): Reconcile with broker every 5 minutes
+            # Catches orphaned positions and stale tracking (prevents $1,822 loss scenario)
+            reconciliation_counter += 1
+            if reconciliation_counter >= RECONCILIATION_INTERVAL:
+                reconcile_positions_with_broker()
+                reconciliation_counter = 0
 
             # Check if we should send daily summary (4:05 PM, after market close)
             if now.hour == 16 and now.minute >= 5 and now.minute < 10 and not daily_summary_sent:
