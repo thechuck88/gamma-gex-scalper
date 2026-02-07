@@ -954,7 +954,8 @@ def show_closed_trades(days=None, account_mode="PAPER", account_id=None):
         if exit_time:
             # Check if reason indicates expiration
             if 'Expiration' in reason or 'expir' in reason.lower():
-                exit_time_str = '\033[33mEXPIRED\033[0m'  # Yellow
+                # Pad "EXPIRED" to 14 chars BEFORE adding color codes for proper alignment
+                exit_time_str = '\033[33m' + 'EXPIRED'.ljust(14) + '\033[0m'
             else:
                 try:
                     dt = datetime.strptime(exit_time, '%Y-%m-%d %H:%M:%S')
