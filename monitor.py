@@ -1851,28 +1851,28 @@ def reconcile_orphaned_positions():
                 # For a credit spread: short premium - long premium = credit
                 total_credit = 0.0
                 for i, pos in enumerate(group_positions):
-                qty = abs(float(pos.get('quantity', 0)))
-                cost = abs(float(pos.get('cost_basis', 0)))
-                price_per_contract = cost / (qty * 100) if qty > 0 else 0
+                    qty = abs(float(pos.get('quantity', 0)))
+                    cost = abs(float(pos.get('cost_basis', 0)))
+                    price_per_contract = cost / (qty * 100) if qty > 0 else 0
 
-                if i in short_indices:
-                    total_credit += price_per_contract  # Short leg adds credit
-                else:
-                    total_credit -= price_per_contract  # Long leg subtracts credit
+                    if i in short_indices:
+                        total_credit += price_per_contract  # Short leg adds credit
+                    else:
+                        total_credit -= price_per_contract  # Long leg subtracts credit
 
-            total_credit = abs(total_credit)
+                total_credit = abs(total_credit)
 
-            # Extract strikes from symbols (e.g., SPXW260120P06850000 -> 6850)
-            strikes = []
-            for sym in symbols:
-                # Last 8 digits are strike * 1000 (e.g., 06850000 = 6850.00)
-                if len(sym) >= 8:
-                    strike_str = sym[-8:]
-                    try:
-                        strike = float(strike_str) / 1000
-                        strikes.append(int(strike))
-                    except:
-                        strikes.append(0)
+                # Extract strikes from symbols (e.g., SPXW260120P06850000 -> 6850)
+                strikes = []
+                for sym in symbols:
+                    # Last 8 digits are strike * 1000 (e.g., 06850000 = 6850.00)
+                    if len(sym) >= 8:
+                        strike_str = sym[-8:]
+                        try:
+                            strike = float(strike_str) / 1000
+                            strikes.append(int(strike))
+                        except:
+                            strikes.append(0)
 
                 # Determine strategy from number of legs
                 if len(group_positions) == 4:
