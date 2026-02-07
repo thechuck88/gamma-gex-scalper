@@ -557,6 +557,49 @@ def show_account(name, account_id, api_key, base_url):
     symbols = [p['symbol'] for p in positions]
     quotes = get_quotes(symbols, api_key, base_url)
 
+    # AUTO-DETECT EXPIRED 0DTE POSITIONS (after 4:10 PM ET)
+    # Tradier sandbox doesn't auto-clear expired options, so we detect and move them to closed trades
+    now_et = datetime.now(ET)
+    is_after_close = now_et.hour > 16 or (now_et.hour == 16 and now_et.minute >= 10)
+    is_after_settlement = now_et.hour >= 17  # After 5 PM, ALL 0DTE should be settled
+    today_str = now_et.strftime('%Y-%m-%d')  # Format: YYYY-MM-DD (e.g., 2026-02-06)
+
+    expired_positions = []
+    active_positions = []
+
+    for pos in positions:
+        symbol = pos['symbol']
+        opt = parse_option_symbol(symbol)
+
+        # Check if this is an expired 0DTE option
+        is_expired_0dte = False
+        if opt and is_after_close:
+            # parse_option_symbol returns expiry as YYYY-MM-DD (e.g., "2026-02-06")
+            expiry_str = opt['expiry']
+            if expiry_str == today_str:
+                # This is 0DTE
+                if is_after_settlement:
+                    # After 5 PM, ALL 0DTE options are expired (regardless of price)
+                    # Tradier sandbox shows stale prices, ignore them
+                    is_expired_0dte = True
+                else:
+                    # Between 4:10-5:00 PM, check if OTM (< $0.10)
+                    quote = quotes.get(symbol, {})
+                    bid = float(quote.get('bid') or 0)
+                    ask = float(quote.get('ask') or 0)
+                    mid = (bid + ask) / 2 if bid and ask else 0
+
+                    if mid < 0.10:
+                        is_expired_0dte = True
+
+        if is_expired_0dte:
+            expired_positions.append(pos)
+        else:
+            active_positions.append(pos)
+
+    # Use only active positions for display (expired ones handled separately)
+    positions = active_positions
+
     # Group positions by date_acquired and symbol root (spreads opened together on same index)
     groups = defaultdict(list)
     for pos in positions:
@@ -748,6 +791,68 @@ def show_account(name, account_id, api_key, base_url):
                     status = f"TP @ ${tp_price:.2f} | SL @ ${sl_price:.2f}"
 
                 print(f"  {'  └─ Targets':<30} {'':>5} {'':>10} {'':>10} {status}")
+            print()
+
+    # Display expired 0DTE positions (auto-detected after 4:10 PM ET)
+    if expired_positions:
+        print(f"\n  {'─'*70}")
+        print(f"  \033[33mEXPIRED 0DTE POSITIONS (Auto-Detected)\033[0m")
+        print(f"  {'─'*70}")
+
+        # Group expired positions by symbol root (same logic as active positions)
+        expired_groups = defaultdict(list)
+        for pos in expired_positions:
+            symbol = pos['symbol']
+            opt = parse_option_symbol(symbol)
+            symbol_root = opt['root'] if opt else symbol.split()[0]
+            date_acquired = pos.get('date_acquired', '')
+            _, key = parse_date_acquired(date_acquired)
+            group_key = (key, symbol_root)
+            expired_groups[group_key].append(pos)
+
+        expired_total_pl = 0
+        for (group_time, symbol_root), group_positions in sorted(expired_groups.items()):
+            group_entry_credit = 0
+            group_lines = []
+            num_contracts = 0
+
+            for pos in group_positions:
+                symbol = pos['symbol']
+                qty = int(pos['quantity'])
+                num_contracts = max(num_contracts, abs(qty))
+                cost_basis = float(pos['cost_basis'])
+                date_acquired = pos.get('date_acquired', '')
+                opened_str, _ = parse_date_acquired(date_acquired)
+
+                opt = parse_option_symbol(symbol)
+                if opt:
+                    display = f"{opt['root']} {opt['expiry'][-5:]} ${opt['strike']:.0f}{opt['type'][0]}"
+                else:
+                    display = symbol
+
+                cost_per = abs(cost_basis / qty / 100) if qty != 0 else 0
+
+                # Expired worthless: entry credit is the profit
+                group_entry_credit -= cost_basis
+
+                group_lines.append(f"  {display:<30} {qty:>+5} ${cost_per:>8.2f} ${'0.00':>8} {'':>12} {'':>7} {opened_str:<16}")
+
+            # Print all legs
+            for line in group_lines:
+                print(line)
+
+            # Spread-level P/L (full credit collected)
+            spread_pl = group_entry_credit
+            expired_total_pl += spread_pl
+            total_pl += spread_pl
+
+            # Entry credit per contract
+            entry_per_contract = group_entry_credit / (num_contracts * 100) if num_contracts > 0 else 0
+
+            # Format spread type
+            spread_type = f"{symbol_root} SPREAD"
+
+            print(f"    └─ {spread_type:<28} ${entry_per_contract:>8.2f} ${'0.00':>8} {format_pl(spread_pl)} \033[32m+100%\033[0m \033[33mEXPIRED\033[0m")
             print()
 
     # Grand total
