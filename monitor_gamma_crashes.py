@@ -25,6 +25,10 @@ LOG_FILE_PAPER = "/root/gamma/data/monitor_paper.log"
 CHECK_INTERVAL = 60  # Check every 60 seconds
 LOOKBACK_SECONDS = 120  # Look back 2 minutes for errors
 
+# Monitor control flags
+MONITOR_LIVE = False  # LIVE service intentionally disabled (2026-02-07)
+MONITOR_PAPER = True
+
 # Email configuration from environment
 SMTP_HOST = os.getenv('SMTP_HOST', 'smtp.gmail.com')
 SMTP_PORT = int(os.getenv('SMTP_PORT', '587'))
@@ -353,11 +357,25 @@ Gamma {bot_type} bot may have crashed silently. Check systemd status:
 
 def main():
     """Main monitoring loop"""
+    monitored_bots = []
+    if MONITOR_LIVE:
+        monitored_bots.append("LIVE")
+    if MONITOR_PAPER:
+        monitored_bots.append("PAPER")
+
+    bots_str = " + ".join(monitored_bots) if monitored_bots else "NONE"
+
     print("="*80)
-    print("GAMMA BOTS CRASH MONITOR (Live + Paper)")
+    print(f"GAMMA BOTS CRASH MONITOR ({bots_str})")
     print("="*80)
-    print(f"Live log: {LOG_FILE_LIVE}")
-    print(f"Paper log: {LOG_FILE_PAPER}")
+    if MONITOR_LIVE:
+        print(f"Live log: {LOG_FILE_LIVE} ✅")
+    else:
+        print(f"Live log: {LOG_FILE_LIVE} ⏸️  DISABLED")
+    if MONITOR_PAPER:
+        print(f"Paper log: {LOG_FILE_PAPER} ✅")
+    else:
+        print(f"Paper log: {LOG_FILE_PAPER} ⏸️  DISABLED")
     print(f"Check interval: {CHECK_INTERVAL}s")
     print(f"Lookback window: {LOOKBACK_SECONDS}s")
     print(f"Email alerts: {EMAIL_TO}")
@@ -366,7 +384,7 @@ def main():
 
     send_discord_alert(
         "Gamma Bots Monitor Started",
-        f"Now monitoring Gamma bots (Live + Paper) for crashes and errors.\n"
+        f"Now monitoring Gamma bots ({bots_str}) for crashes and errors.\n"
         f"Check interval: {CHECK_INTERVAL}s\n"
         f"Will alert on: errors, exceptions, crashes, restarts, crash loops\n"
         f"Critical alerts sent to: Discord + {EMAIL_TO}",
@@ -378,23 +396,31 @@ def main():
 
     try:
         while True:
-            # Check both live and paper bots
-            check_for_errors(LOG_FILE_LIVE, "LIVE")
-            check_for_errors(LOG_FILE_PAPER, "PAPER")
+            # Check live and paper bots based on monitor flags
+            if MONITOR_LIVE:
+                check_for_errors(LOG_FILE_LIVE, "LIVE")
+            if MONITOR_PAPER:
+                check_for_errors(LOG_FILE_PAPER, "PAPER")
 
-            detect_crash_loop('gamma-scalper-monitor-live.service', 'LIVE', CRASH_LOOP_STATE_LIVE)
-            detect_crash_loop('gamma-scalper-monitor-paper.service', 'PAPER', CRASH_LOOP_STATE_PAPER)
+            if MONITOR_LIVE:
+                detect_crash_loop('gamma-scalper-monitor-live.service', 'LIVE', CRASH_LOOP_STATE_LIVE)
+            if MONITOR_PAPER:
+                detect_crash_loop('gamma-scalper-monitor-paper.service', 'PAPER', CRASH_LOOP_STATE_PAPER)
 
             service_check_counter += 1
             if service_check_counter >= 5:
-                check_service_status('gamma-scalper-monitor-live.service', 'LIVE')
-                check_service_status('gamma-scalper-monitor-paper.service', 'PAPER')
+                if MONITOR_LIVE:
+                    check_service_status('gamma-scalper-monitor-live.service', 'LIVE')
+                if MONITOR_PAPER:
+                    check_service_status('gamma-scalper-monitor-paper.service', 'PAPER')
                 service_check_counter = 0
 
             heartbeat_check_counter += 1
             if heartbeat_check_counter >= 5:
-                check_bot_heartbeat(LOG_FILE_LIVE, 'LIVE')
-                check_bot_heartbeat(LOG_FILE_PAPER, 'PAPER')
+                if MONITOR_LIVE:
+                    check_bot_heartbeat(LOG_FILE_LIVE, 'LIVE')
+                if MONITOR_PAPER:
+                    check_bot_heartbeat(LOG_FILE_PAPER, 'PAPER')
                 heartbeat_check_counter = 0
 
             if int(time.time()) % 3600 < CHECK_INTERVAL:
