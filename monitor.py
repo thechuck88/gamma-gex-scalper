@@ -1811,20 +1811,46 @@ def reconcile_orphaned_positions():
         log("Adding emergency tracking with conservative stop loss...")
         log("")
 
-        # Group orphaned legs into spreads (2-leg or 4-leg)
-        # For simplicity, assume they're all part of one spread
-        if len(orphaned) == 2 or len(orphaned) == 4:
-            # Create emergency tracking order
-            symbols = [pos.get('symbol') for pos in orphaned]
-            quantities = [float(pos.get('quantity', 0)) for pos in orphaned]
+        # ENHANCED (2026-02-07): Group orphaned legs by symbol root and expiration
+        # Can handle multiple spreads simultaneously (e.g., SPXW + NDXP orphans at once)
+        from collections import defaultdict
 
-            # Identify shorts (negative quantity) vs longs (positive quantity)
-            short_indices = [i for i, qty in enumerate(quantities) if qty < 0]
+        groups = defaultdict(list)
+        for pos in orphaned:
+            sym = pos.get('symbol')
+            # Extract root (e.g., SPXW, NDXP) and expiration (YYMMDD)
+            # Format: SPXW260206P06855000 -> root=SPXW, exp=260206
+            if len(sym) >= 15:
+                root = sym[:-15]  # Everything before the 15-char OCC suffix
+                exp = sym[-15:-9]  # 6 digits (YYMMDD)
+                group_key = f"{root}_{exp}"
+                groups[group_key].append(pos)
 
-            # Estimate entry credit from position costs
-            # For a credit spread: short premium - long premium = credit
-            total_credit = 0.0
-            for i, pos in enumerate(orphaned):
+        log(f"Grouped {len(orphaned)} orphaned legs into {len(groups)} separate spread(s):")
+        for group_key, group_positions in groups.items():
+            root, exp = group_key.split('_')
+            log(f"  - {root} {exp}: {len(group_positions)} legs")
+        log("")
+
+        # Process each group separately
+        recovered_count = 0
+        failed_groups = []
+
+        for group_key, group_positions in groups.items():
+            root, exp = group_key.split('_')
+
+            if len(group_positions) == 2 or len(group_positions) == 4:
+                # Create emergency tracking order for this group
+                symbols = [pos.get('symbol') for pos in group_positions]
+                quantities = [float(pos.get('quantity', 0)) for pos in group_positions]
+
+                # Identify shorts (negative quantity) vs longs (positive quantity)
+                short_indices = [i for i, qty in enumerate(quantities) if qty < 0]
+
+                # Estimate entry credit from position costs
+                # For a credit spread: short premium - long premium = credit
+                total_credit = 0.0
+                for i, pos in enumerate(group_positions):
                 qty = abs(float(pos.get('quantity', 0)))
                 cost = abs(float(pos.get('cost_basis', 0)))
                 price_per_contract = cost / (qty * 100) if qty > 0 else 0
@@ -1848,21 +1874,21 @@ def reconcile_orphaned_positions():
                     except:
                         strikes.append(0)
 
-            # Determine strategy from number of legs
-            if len(orphaned) == 4:
-                strategy = "IC"
-            elif quantities[0] < 0:  # Short first leg
-                # Check if PUT or CALL from symbol
-                if 'P' in symbols[0]:
-                    strategy = "PUT"
+                # Determine strategy from number of legs
+                if len(group_positions) == 4:
+                    strategy = "IC"
+                elif quantities[0] < 0:  # Short first leg
+                    # Check if PUT or CALL from symbol
+                    if 'P' in symbols[0]:
+                        strategy = "PUT"
+                    else:
+                        strategy = "CALL"
                 else:
-                    strategy = "CALL"
-            else:
-                strategy = "SPREAD"
+                    strategy = "SPREAD"
 
-            # Create emergency order tracking
-            emergency_order = {
-                "order_id": f"ORPHAN_{int(time.time())}",
+                # Create emergency order tracking
+                emergency_order = {
+                    "order_id": f"ORPHAN_{root}_{exp}_{int(time.time())}",
                 "entry_credit": total_credit,
                 "entry_time": datetime.datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S'),
                 "strategy": strategy,
@@ -1884,39 +1910,58 @@ def reconcile_orphaned_positions():
                 "orphan_recovery": True  # Flag for identification
             }
 
-            # Add to tracking
-            tracked_orders.append(emergency_order)
-            save_orders(tracked_orders)
+                # Add to tracking
+                tracked_orders.append(emergency_order)
+                save_orders(tracked_orders)
 
-            log(f"✓ Emergency tracking added for order {emergency_order['order_id']}")
-            log(f"  Strategy: {strategy}")
-            log(f"  Strikes: {'/'.join(map(str, strikes))}")
-            log(f"  Entry Credit (estimated): ${total_credit:.2f}")
-            log(f"  Stop Loss: ${emergency_order['sl_price']:.2f} (15%)")
-            log(f"  Profit Target: ${emergency_order['tp_price']:.2f} (50%)")
-            log("")
-            log("⚠️  STOP LOSS PROTECTION NOW ACTIVE ⚠️")
+                log(f"✓ Emergency tracking added for {root} spread: {emergency_order['order_id']}")
+                log(f"  Strategy: {strategy}")
+                log(f"  Strikes: {'/'.join(map(str, strikes))}")
+                log(f"  Entry Credit (estimated): ${total_credit:.2f}")
+                log(f"  Stop Loss: ${emergency_order['sl_price']:.2f} (15%)")
+                log(f"  Profit Target: ${emergency_order['tp_price']:.2f} (50%)")
+                log(f"  ⚠️  STOP LOSS PROTECTION NOW ACTIVE ⚠️")
+                log("")
 
-            # Send Discord alert
-            if DISCORD_ENABLED and DISCORD_WEBHOOK_URL:
-                msg = {
-                    "embeds": [{
-                        "title": "⚠️ ORPHANED POSITION RECOVERED",
-                        "description": f"Found untracked {strategy} spread in Tradier account.\n**Emergency stop loss protection activated.**",
-                        "color": 0xff9900,  # Orange
-                        "fields": [
-                            {"name": "Strikes", "value": "/".join(map(str, strikes)), "inline": True},
-                            {"name": "Entry Credit", "value": f"${total_credit:.2f} (estimated)", "inline": True},
-                            {"name": "Stop Loss", "value": f"${emergency_order['sl_price']:.2f} (15%)", "inline": True},
-                        ],
-                        "footer": {"text": f"{MODE} mode - Orphan recovery activated"},
-                        "timestamp": datetime.datetime.utcnow().isoformat()
-                    }]
-                }
-                _send_to_webhook(DISCORD_WEBHOOK_URL, msg, message_type="crash")
-        else:
-            log(f"⚠️  Cannot auto-recover: Expected 2 or 4 legs, found {len(orphaned)}")
+                recovered_count += 1
+
+                # Send Discord alert
+                if DISCORD_ENABLED and DISCORD_WEBHOOK_URL:
+                    msg = {
+                        "embeds": [{
+                            "title": f"⚠️ ORPHANED {root} POSITION RECOVERED",
+                            "description": f"Found untracked {strategy} spread in Tradier account.\n**Emergency stop loss protection activated.**",
+                            "color": 0xff9900,  # Orange
+                            "fields": [
+                                {"name": "Symbol Root", "value": root, "inline": True},
+                                {"name": "Expiration", "value": exp, "inline": True},
+                                {"name": "Strikes", "value": "/".join(map(str, strikes)), "inline": False},
+                                {"name": "Entry Credit", "value": f"${total_credit:.2f} (estimated)", "inline": True},
+                                {"name": "Stop Loss", "value": f"${emergency_order['sl_price']:.2f} (15%)", "inline": True},
+                            ],
+                            "footer": {"text": f"{MODE} mode - Orphan recovery {recovered_count}"},
+                            "timestamp": datetime.datetime.utcnow().isoformat()
+                        }]
+                    }
+                    _send_to_webhook(DISCORD_WEBHOOK_URL, msg, message_type="crash")
+
+            else:
+                # Can't auto-recover this group (not 2 or 4 legs)
+                log(f"⚠️  Cannot auto-recover {root} {exp}: Found {len(group_positions)} legs (expected 2 or 4)")
+                failed_groups.append((root, exp, len(group_positions)))
+
+        # Summary
+        log("=" * 70)
+        if recovered_count > 0:
+            log(f"✅ Successfully recovered {recovered_count} orphaned spread(s) with stop loss protection")
+
+        if failed_groups:
+            log(f"❌ Failed to auto-recover {len(failed_groups)} group(s):")
+            for root, exp, count in failed_groups:
+                log(f"   - {root} {exp}: {count} legs (manual intervention required)")
             log("⚠️  MANUAL INTERVENTION REQUIRED - Close positions manually in Tradier")
+
+        log("=" * 70)
 
     except Exception as e:
         log(f"Error during position reconciliation: {e}")
