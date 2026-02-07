@@ -1100,6 +1100,64 @@ def check_and_close_positions():
             log(f"Invalid entry credit for {order_id} — skipping")
             continue
 
+        # BUGFIX (2026-02-07): Skip positions already pending closure to prevent infinite loop.
+        # Previously, positions that failed broker verification would be re-evaluated every
+        # 3-second cycle, triggering duplicate close attempts and duplicate balance updates.
+        # Bug C: Position 25278940 accumulated 4,400+ duplicate $2820 balance updates.
+        if order.get('pending_closure'):
+            closure_attempts = order.get('closure_attempts', 0)
+            max_closure_attempts = 5  # Max retry attempts before giving up
+
+            if closure_attempts >= max_closure_attempts:
+                log(f"⚠️  Position {order_id} ABANDONED after {closure_attempts} close attempts")
+                log(f"   MANUAL INTERVENTION REQUIRED - check broker directly")
+                # Send Discord alert for manual intervention
+                if DISCORD_ENABLED and DISCORD_WEBHOOK_URL:
+                    msg = {
+                        "embeds": [{
+                            "title": f"🚨 POSITION STUCK - MANUAL CLOSE REQUIRED",
+                            "description": f"Order {order_id} failed to close after {closure_attempts} attempts.\n"
+                                           f"**Check Tradier directly and close manually.**",
+                            "color": 0xff0000,
+                            "timestamp": datetime.datetime.utcnow().isoformat()
+                        }]
+                    }
+                    _send_to_webhook(DISCORD_WEBHOOK_URL, msg, message_type="crash")
+                continue
+
+            log(f"⏳ Position {order_id} pending closure (attempt {closure_attempts}/{max_closure_attempts})")
+            # Re-verify with broker
+            verified = verify_position_closed_at_broker(order)
+
+            # BUGFIX (2026-02-07): For after-hours 0DTE, force removal after 4:15 PM
+            if not verified and now.hour >= 16:
+                minutes_after_close = (now.hour - 16) * 60 + now.minute
+                if minutes_after_close >= 15:
+                    log(f"⏰ Post-market override: {order_id} expired 0DTE, forcing removal")
+                    verified = True
+
+            if verified:
+                # BUGFIX (2026-02-07): Now update trade log ONLY on confirmed closure
+                # This is the deferred update from when close was first attempted
+                closure_exit_reason = order.get('closure_exit_reason', 'pending_closure_verified')
+                closure_exit_value = order.get('closure_exit_value', 0)
+                position_size = order.get('position_size', 1)
+                update_trade_log(order_id, closure_exit_value, closure_exit_reason,
+                                 entry_credit, entry_time, position_size)
+                # Send Discord exit alert (deferred)
+                closure_profit_pct = order.get('closure_profit_pct', 0)
+                strategy = order.get('strategy', 'SPREAD')
+                strikes = order.get('strikes', 'N/A')
+                send_discord_exit_alert(order_id, strategy, strikes, entry_credit,
+                                        closure_exit_value, closure_exit_reason, closure_profit_pct)
+                remove_order(order_id, verified_closed_at_broker=True, reason="pending_closure_verified")
+                log(f"Position {order_id} confirmed closed at broker after retry")
+            else:
+                order['closure_attempts'] = closure_attempts + 1
+                orders_modified = True
+                log(f"⚠️  Position {order_id} still open at broker (attempt {closure_attempts + 1})")
+            continue
+
         # Get current spread value
         current_value, bid_value, ask_value = get_spread_value(order)
 
@@ -1467,37 +1525,55 @@ def check_and_close_positions():
         if exit_reason:
             log(f"CLOSING {order_id}: {exit_reason}")
 
-            if now.hour >= 16:
+            is_after_hours = now.hour >= 16
+            if is_after_hours:
                 # After market — just log as expired
                 success = True
             else:
                 success = close_spread(order)
 
             if success:
-                # BUGFIX (2026-01-10): Extract position_size and pass to update_trade_log
-                position_size = order.get('position_size', 1)
-                update_trade_log(order_id, current_value, exit_reason, entry_credit, entry_time, position_size)
-                # Send Discord exit alert
-                strategy = order.get('strategy', 'SPREAD')
-                strikes = order.get('strikes', 'N/A')
-                send_discord_exit_alert(order_id, strategy, strikes, entry_credit, current_value, exit_reason, profit_pct)
-
-                # CRITICAL SAFETY (2026-02-04): Verify position actually closed before removing
-                # Silent removal without verification caused $1,822 loss
+                # BUGFIX (2026-02-07): Verify BEFORE updating balance to prevent duplicate updates.
+                # Previously, update_trade_log() was called before verification. If verification
+                # failed, the position stayed in tracking, and the next loop iteration would call
+                # update_trade_log() AGAIN, adding duplicate P&L to the account balance.
+                # Bug C: This caused $5.8M phantom balance from 4,400+ duplicate $2820 updates.
                 log(f"Verifying position {order_id} actually closed at broker...")
-                import time
                 time.sleep(2)  # Give broker 2 seconds to process close
 
                 verified = verify_position_closed_at_broker(order)
+
+                # BUGFIX (2026-02-07): For after-hours 0DTE expiration, positions may still
+                # show in broker's system even though they're worthless expired options.
+                # Allow removal after 4:15 PM without strict broker verification.
+                if not verified and is_after_hours:
+                    minutes_after_close = (now.hour - 16) * 60 + now.minute
+                    if minutes_after_close >= 15:
+                        log(f"⏰ Post-market override: {order_id} expired 0DTE, forcing removal "
+                            f"(market closed {minutes_after_close} min ago)")
+                        verified = True
+
                 if verified:
+                    # Only update trade log and balance AFTER successful verification
+                    position_size = order.get('position_size', 1)
+                    update_trade_log(order_id, current_value, exit_reason, entry_credit, entry_time, position_size)
+                    # Send Discord exit alert
+                    strategy = order.get('strategy', 'SPREAD')
+                    strikes = order.get('strikes', 'N/A')
+                    send_discord_exit_alert(order_id, strategy, strikes, entry_credit, current_value, exit_reason, profit_pct)
                     remove_order(order_id, verified_closed_at_broker=True, reason=exit_reason)
                     log(f"Position {order_id} closed and removed from tracking")
                 else:
                     log(f"⚠️  Position {order_id} NOT VERIFIED closed at broker")
-                    log(f"   Keeping in tracking for safety (will retry reconciliation)")
-                    # Mark as pending closure
+                    log(f"   Keeping in tracking for safety (will retry via pending_closure)")
+                    # Mark as pending closure - the pending_closure check at top of loop
+                    # will handle retries WITHOUT re-triggering balance updates
                     order['pending_closure'] = True
                     order['closure_attempt_time'] = now.isoformat()
+                    order['closure_attempts'] = 1
+                    order['closure_exit_reason'] = exit_reason
+                    order['closure_exit_value'] = current_value
+                    order['closure_profit_pct'] = profit_pct
                     orders_modified = True
             else:
                 log(f"Failed to close {order_id} — will retry")
@@ -1600,7 +1676,19 @@ def reconcile_positions_with_broker():
                 position_list = [position_list]
             broker_positions = position_list
 
-        broker_symbols = set(p.get('symbol') for p in broker_positions)
+        # BUGFIX (2026-02-06): Filter to option positions ONLY
+        # Non-option positions (ETF holdings like TDAQ, TSPY, QDTE) were causing
+        # false-positive orphan warnings every 5 minutes for 6+ hours.
+        # Option symbols start with known roots (SPXW, NDXP); equity symbols do not.
+        OPTION_ROOTS = ('SPXW', 'NDXP')
+        option_positions = [p for p in broker_positions if p.get('symbol', '').startswith(OPTION_ROOTS)]
+        equity_positions = [p for p in broker_positions if not p.get('symbol', '').startswith(OPTION_ROOTS)]
+
+        if equity_positions:
+            equity_syms = [p.get('symbol') for p in equity_positions]
+            log(f"ℹ️  Ignoring {len(equity_positions)} non-option positions: {', '.join(equity_syms)}")
+
+        broker_symbols = set(p.get('symbol') for p in option_positions)
 
         # Get tracked positions
         orders = load_orders()
@@ -1612,7 +1700,7 @@ def reconcile_positions_with_broker():
         # Check for orphaned positions (at broker but not tracked)
         orphaned = broker_symbols - tracked_symbols
         if orphaned:
-            log(f"🚨 CRITICAL: Found {len(orphaned)} ORPHANED positions at broker!")
+            log(f"🚨 CRITICAL: Found {len(orphaned)} ORPHANED option positions at broker!")
             for symbol in orphaned:
                 log(f"   - {symbol} (open at broker, NOT TRACKED)")
             log(f"   These positions have NO STOP LOSS PROTECTION!")
@@ -1643,7 +1731,7 @@ def reconcile_positions_with_broker():
                     log(f"⚠️  Position {order_id} still open at broker after close attempt")
 
         if not orphaned and not orders_modified:
-            log(f"✅ Reconciliation complete: tracking matches broker ({len(broker_positions)} positions)")
+            log(f"✅ Reconciliation complete: tracking matches broker ({len(option_positions)} option positions, {len(equity_positions)} equity positions ignored)")
 
     except Exception as e:
         log(f"⚠️  Reconciliation error: {e}")
