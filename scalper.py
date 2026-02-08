@@ -634,6 +634,87 @@ def store_gex_polarity(nearby_peaks):
     log(f"GEX Polarity: GPI={polarity.gpi:+.3f} ({polarity.direction}), "
         f"Magnitude={polarity.magnitude/1e9:.1f}B ({polarity.confidence})")
 
+def get_option_chain(index_symbol, option_type):
+    """
+    Fetch option chain from Tradier API for OTM spread analysis.
+
+    Args:
+        index_symbol: Symbol to fetch (e.g., "$SPX.X", "$NDX.X")
+        option_type: 'call' or 'put'
+
+    Returns:
+        pandas.DataFrame with columns ['strike', 'bid', 'ask'] or None on error
+    """
+    try:
+        # Must use LIVE API for options data (sandbox returns null)
+        LIVE_URL = "https://api.tradier.com/v1/"
+        LIVE_HEADERS = {"Accept": "application/json", "Authorization": f"Bearer {TRADIER_LIVE_KEY}"}
+
+        today = date.today().strftime("%Y-%m-%d")
+
+        # Get options chain (use retry wrapper for reliability)
+        r = retry_api_call(
+            lambda: requests.get(
+                f"{LIVE_URL}/markets/options/chains",
+                headers=LIVE_HEADERS,
+                params={"symbol": index_symbol, "expiration": today, "greeks": "false"},
+                timeout=15
+            ),
+            max_attempts=3,
+            base_delay=2.0,
+            description=f"OTM option chain ({option_type})"
+        )
+
+        # Handle retry failure
+        if r is None:
+            log(f"Option chain API failed: All retry attempts exhausted ({option_type})")
+            return None
+
+        if r.status_code != 200:
+            log(f"Option chain API failed: {r.status_code} ({option_type})")
+            return None
+
+        options = r.json().get("options", {})
+        if not options:
+            log(f"Option chain API returned no options data ({option_type})")
+            return None
+
+        options = options.get("option", [])
+        if not options:
+            log(f"Option chain API returned empty options list ({option_type})")
+            return None
+
+        # Filter to requested option type and extract strikes with bid/ask
+        filtered_options = []
+        for opt in options:
+            if opt.get('option_type', '').lower() == option_type.lower():
+                strike = opt.get('strike', 0)
+                bid = opt.get('bid', 0)
+                ask = opt.get('ask', 0)
+
+                # Only include options with valid bid/ask
+                if strike > 0 and bid > 0 and ask > 0:
+                    filtered_options.append({
+                        'strike': strike,
+                        'bid': bid,
+                        'ask': ask
+                    })
+
+        if not filtered_options:
+            log(f"No valid {option_type} options found in chain")
+            return None
+
+        # Convert to DataFrame and sort by strike
+        df = pd.DataFrame(filtered_options)
+        df = df.sort_values('strike').reset_index(drop=True)
+
+        log(f"Fetched {len(df)} {option_type} options (strikes {df['strike'].min():.0f}-{df['strike'].max():.0f})")
+        return df
+
+    except Exception as e:
+        log(f"Error fetching option chain for {option_type}: {e}")
+        return None
+
 def calculate_gex_pin(index_price):
     """Calculate real GEX pin from options open interest and gamma data (index-agnostic).
 
