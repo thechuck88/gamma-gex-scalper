@@ -1,3 +1,89 @@
+## 2026-02-08 - OTM Strategy Bug Fix + sysstat.sh Color Coding
+
+### Critical Bug: OTM Strategy Never Executed
+
+**Problem Discovered**: GEX Scalper showing 0 OTM trades since deployment (2026-01-24), while GEX PIN had 22 trades.
+
+**Root Cause (Opus Investigation)**:
+- `get_option_chain()` function called at lines 1692 and 2249 but **never defined**
+- `NameError: name 'get_option_chain' is not defined` raised every single OTM attempt
+- Both call sites wrapped in `try/except Exception` → caught error, logged, continued silently
+- Zero OTM trades in 2-week history (never worked since feature deployed)
+
+**Impact**:
+- **OTM Single-Sided spreads** (fallback when GEX skips): Never executed
+- **OTM Iron Condors** (alongside GEX trades): Never executed
+- Lost opportunity for additional income on SKIP days and dual-strategy days
+
+**Two OTM Execution Paths**:
+1. **Path 1 (Fallback)**: When GEX returns SKIP (price >50pts from pin), try OTM single-sided spread
+2. **Path 2 (Alongside)**: After successful GEX trade, check if can also place OTM iron condor
+
+**The Fix**:
+Created `get_option_chain(index_symbol, option_type)` function:
+- Fetches option chain from Tradier LIVE API (sandbox has no options data)
+- Uses retry logic (3 attempts, exponential backoff)
+- Filters to requested option type ('call' or 'put')
+- Returns DataFrame with `['strike', 'bid', 'ask']` columns
+- Handles errors gracefully, logs failures
+
+**Why Silent Failure**:
+```python
+try:
+    chain_df = get_option_chain(index_symbol, option_type)
+    # ... OTM logic ...
+except Exception as e:  # ← Catches ALL exceptions including NameError!
+    log(f"Error getting OTM quotes: {e}")  # Logged but not escalated
+    return 0.0  # Continue running, don't crash
+```
+
+**Lesson Learned**:
+- ✅ Broad exception handling prevents bot crashes (good for production)
+- ❌ Hides bugs like undefined functions (bad for debugging)
+- Need monitoring/alerts for repeated error patterns, not just logging
+
+**Expected Behavior After Fix**:
+- Logs should show: `Fetched N put/call options (strikes X-Y)`
+- OTM trades should appear in trades.csv with strategy `OTM_SINGLE_SIDED` or `OTM_IRON_CONDOR`
+- Win rate and P&L tracking for OTM strategy
+
+**Deployment**:
+- Committed: `9f9cef5` (2026-02-08)
+- Testing: Monitor logs next market session for OTM execution attempts
+
+---
+
+### sysstat.sh Color Coding Enhancement
+
+**Added color coding to trading performance metrics** for at-a-glance performance assessment:
+
+**Color Logic**:
+- **P&L**: Green if positive (≥0), Red if negative
+- **Profit Factor**: Green if >1, Red if ≤1
+- **Win Rate**: Green if >50%, Red if ≤50%
+
+**Applied To**:
+- MNQ SuperTrend: P&L, PF, WR
+- GEX Scalper: P&L, PF, WR (main + strategy breakdown for PIN/OTM)
+- Stock Bot: P&L, PF, WR
+- TOTAL P&L
+
+**Example Output**:
+```
+MNQ SuperTrend:      P&L: $5981 (green) | PF: 1.82 (green) | WR: 54.0% (green)
+GEX Scalper:         P&L: $4016 (green) | PF: 4.91 (green) | WR: 50.0% (red)
+Stock Bot:           P&L: $-628 (red)   | PF: 0.12 (red)   | WR: 25.0% (red)
+TOTAL P&L:           $9369 (green)
+```
+
+**User Benefit**: Instantly identify winning vs losing strategies without parsing numbers.
+
+**Commits**:
+- sysstat.sh: `692bd43` (2026-02-08)
+- OTM fix: `9f9cef5` (2026-02-08)
+
+---
+
 ## 2026-01-16 - Half-Kelly Autoscaling + Monte Carlo Validation
 
 ### Half-Kelly Position Sizing Implementation
