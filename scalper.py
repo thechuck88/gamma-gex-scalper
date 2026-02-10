@@ -1428,6 +1428,100 @@ def check_realized_volatility(index_symbol="SPX", lookback_minutes=30):
         log(f"Realized vol check failed: {e}, assuming safe")
         return True, None  # On error, don't block trade
 
+def check_trend_pressure(index_symbol="SPX", adx_threshold=25, momentum_threshold_pts=10, lookback_bars=6):
+    """
+    Check if market is trending (bad for GEX consolidation strategy).
+
+    Uses two filters:
+    1. ADX (trend strength) - ADX > 25 indicates strong directional pressure
+    2. Recent momentum - Move > 10 points in 30 min indicates fast trending
+
+    Args:
+        index_symbol: 'SPX' or 'NDX'
+        adx_threshold: ADX above this = trending (default 25)
+        momentum_threshold_pts: Points moved in lookback period (default 10)
+        lookback_bars: Number of 5-min bars to check (default 6 = 30 min)
+
+    Returns (is_safe, message):
+        - (True, None) if market is consolidating (safe for GEX)
+        - (False, reason) if market is trending (skip GEX entry)
+
+    Why this matters: GEX pin strategy assumes price will consolidate at gamma wall.
+    Strong trending markets overwhelm gamma effects, causing emergency stops.
+    Today (2026-02-10): All 3 losses from trending market breaking through GEX levels.
+    """
+    try:
+        # Import talib here (lazy import to avoid startup dependency)
+        import talib
+        import numpy as np
+
+        # Get ETF symbol for data (SPX → SPY, NDX → QQQ)
+        etf_map = {'SPX': 'SPY', 'NDX': 'QQQ'}
+        etf_symbol = etf_map.get(index_symbol, 'SPY')
+
+        # Download 5-minute bars (need ~50 bars for ADX calculation)
+        log(f"Trend pressure check: Fetching {etf_symbol} 5-min data...")
+        data = yf.download(etf_symbol, period="1d", interval="5m", progress=False)
+
+        if len(data) < 20:
+            log("Trend pressure check: insufficient data, assuming safe")
+            return True, None
+
+        # Extract OHLC data
+        high = data['High'].values
+        low = data['Low'].values
+        close = data['Close'].values
+
+        # Filter 1: ADX (trend strength)
+        adx = talib.ADX(high, low, close, timeperiod=14)
+        current_adx = adx[-1]
+
+        if np.isnan(current_adx):
+            log("Trend pressure check: ADX calculation failed, assuming safe")
+            return True, None
+
+        log(f"ADX check: {current_adx:.1f} (threshold: {adx_threshold})")
+
+        if current_adx > adx_threshold:
+            # Also check directional components
+            plus_di = talib.PLUS_DI(high, low, close, timeperiod=14)
+            minus_di = talib.MINUS_DI(high, low, close, timeperiod=14)
+
+            di_spread = abs(plus_di[-1] - minus_di[-1])
+            direction = "UP" if plus_di[-1] > minus_di[-1] else "DOWN"
+
+            reason = f"Strong {direction} trend (ADX: {current_adx:.1f}, DI spread: {di_spread:.1f})"
+            log(f"❌ Trending market detected: {reason}")
+            return False, reason
+
+        # Filter 2: Recent momentum (simple but effective)
+        current_price = close[-1]
+        if len(close) > lookback_bars:
+            price_ago = close[-lookback_bars]
+            points_moved = abs(current_price - price_ago)
+            minutes = lookback_bars * 5
+
+            # Scale threshold for NDX (25× SPX typically)
+            if index_symbol == 'NDX':
+                momentum_threshold_pts = momentum_threshold_pts * 5  # 50 points for NDX
+
+            log(f"Momentum check: {etf_symbol} moved {points_moved:.1f} pts in {minutes} min")
+
+            if points_moved > momentum_threshold_pts:
+                reason = f"Fast momentum: {points_moved:.1f} pts in {minutes} min (threshold: {momentum_threshold_pts})"
+                log(f"❌ Momentum too strong: {reason}")
+                return False, reason
+
+        log(f"✅ Market consolidating: ADX {current_adx:.1f} < {adx_threshold}, momentum OK")
+        return True, None
+
+    except ImportError:
+        log("⚠️ talib not available, skipping trend pressure check")
+        return True, None  # Missing dependency, don't block trade
+    except Exception as e:
+        log(f"Trend pressure check failed: {e}, assuming safe")
+        return True, None  # On error, don't block trade
+
 def apply_bwic_to_ic(setup, index_price, vix):
     """
     Apply Broken Wing Iron Condor (BWIC) logic to IC setups.
@@ -1655,6 +1749,18 @@ try:
         log(f"High realized volatility: {rvol_reason}")
         log("NO TRADE — Market too choppy, GEX pin unreliable in whipsaw conditions")
         send_discord_skip_alert(f"Choppy market: {rvol_reason}", run_data)
+        raise SystemExit
+
+    # === TREND PRESSURE FILTER (ADX + MOMENTUM) ===
+    # OPTIMIZATION (2026-02-10): Detect trending markets that break through GEX levels
+    # Analysis: 2026-02-10 had 3 emergency stops from strong uptrend overwhelming GEX pin
+    # ADX > 25 = strong directional pressure, >10 pts in 30 min = fast trending
+    # GEX strategy needs consolidation/chop, not trending markets
+    trend_safe, trend_reason = check_trend_pressure(INDEX_CONFIG.code, adx_threshold=25, momentum_threshold_pts=10, lookback_bars=6)
+    if not trend_safe:
+        log(f"Trending market detected: {trend_reason}")
+        log("NO TRADE — GEX pin strategy requires consolidation, not trending markets")
+        send_discord_skip_alert(f"Trending market: {trend_reason}", run_data)
         raise SystemExit
 
     # === EXPECTED MOVE FILTER ===
