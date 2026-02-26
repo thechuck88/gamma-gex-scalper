@@ -34,8 +34,14 @@ from autoscaling import calculate_position_size, get_max_risk_for_strategy
 # ==================== CONFIG ====================
 from config import (PAPER_ACCOUNT_ID, LIVE_ACCOUNT_ID, TRADIER_LIVE_KEY, TRADIER_SANDBOX_KEY,
                     DISCORD_ENABLED, DISCORD_WEBHOOK_LIVE_URL, DISCORD_WEBHOOK_PAPER_URL,
-                    DISCORD_DELAYED_ENABLED, DISCORD_DELAYED_WEBHOOK_URL, DISCORD_DELAY_SECONDS)
+                    DISCORD_DELAYED_ENABLED, DISCORD_DELAYED_WEBHOOK_URL, DISCORD_DELAY_SECONDS,
+                    OBSERVATION_ENABLED, OBSERVATION_PERIOD_SECONDS, OBSERVATION_MAX_RANGE_PCT,
+                    OBSERVATION_MAX_DIRECTION_CHANGES, OBSERVATION_EMERGENCY_STOP_THRESHOLD,
+                    OBSERVATION_MIN_TICK_INTERVAL)
 from threading import Timer
+
+# ==================== OBSERVATION PERIOD ====================
+from observation_period import ObservationPeriod, log_observation_decision
 
 # ==================== RETRY LOGIC ====================
 def retry_api_call(func, max_attempts=3, base_delay=2.0, description="API call"):
@@ -1180,8 +1186,11 @@ def check_credit_safety_buffer(expected_credit, emergency_stop_pct=0.25):
     Returns:
         (is_safe, reason)
     """
-    # Absolute minimum credit (below this, emergency stop too tight)
-    ABSOLUTE_MIN_CREDIT = 1.00
+    # ABSOLUTE MINIMUM CREDIT (2026-02-26): Raised from $1.00 to $1.30
+    # Analysis: EMERGENCY exits with credits $0.90-$1.20 lose disproportionately.
+    # Low credit = tight emergency stop = no room for 0DTE gamma swings.
+    # $1.30 provides $0.325 emergency stop buffer (25%) = adequate breathing room.
+    ABSOLUTE_MIN_CREDIT = 1.30
 
     if expected_credit < ABSOLUTE_MIN_CREDIT:
         reason = (f"Credit ${expected_credit:.2f} below absolute minimum "
@@ -1189,38 +1198,29 @@ def check_credit_safety_buffer(expected_credit, emergency_stop_pct=0.25):
                  f"${expected_credit * emergency_stop_pct:.2f}, too tight for 0DTE volatility)")
         return False, reason
 
-    # For small credits, require adequate buffer after emergency stop
-    if expected_credit < 1.50:
-        emergency_threshold = expected_credit * emergency_stop_pct
-        remaining_after_stop = expected_credit - emergency_threshold
-
-        # Require at least $0.15 remaining after emergency stop
-        # (Covers slippage, spread, market noise)
-        min_remaining = 0.15
-
-        if remaining_after_stop < min_remaining:
-            reason = (f"Credit ${expected_credit:.2f} too small - "
-                     f"after 25% emergency stop (${emergency_threshold:.2f}), "
-                     f"only ${remaining_after_stop:.2f} buffer remains "
-                     f"(need ${min_remaining:.2f} for slippage/noise)")
-            return False, reason
-
-    # Large credits (>= $1.50) are safe
+    # Large credits (>= $1.30) are safe
     return True, f"Credit ${expected_credit:.2f} provides adequate safety buffer"
 
-def check_market_momentum(index_price, index_symbol='SPX', lookback_minutes=5):
+def check_market_momentum(index_price, index_symbol='SPX', lookback_minutes=5, trade_direction=None):
     """
     FIX #4 (2026-02-04): Block entries if market has moved significantly in recent minutes.
+    ENHANCEMENT (2026-02-26): Also check if market is moving AGAINST the trade direction.
 
     Large moves indicate:
     - High volatility → wide spreads
     - Directional momentum → likely to continue
     - Fast-moving market → poor fill quality
 
+    Directional check (new):
+    - If selling PUTs (bullish bet), block if SPX is dropping
+    - If selling CALLs (bearish bet), block if SPX is rising
+    - Prevents entering into adverse momentum that causes immediate EMERGENCY stops
+
     Args:
         index_price: Current index price (SPX or NDX)
         index_symbol: Index ticker ('^GSPC' for SPX, '^NDX' for NDX)
         lookback_minutes: How far back to check (default 5 minutes)
+        trade_direction: 'BULLISH', 'BEARISH', or 'NEUTRAL' (for directional check)
 
     Returns:
         (is_safe, reason)
@@ -1257,6 +1257,7 @@ def check_market_momentum(index_price, index_symbol='SPX', lookback_minutes=5):
             price_5min_ago = df.iloc[0]['Close']
 
         change_5m = abs(index_price - price_5min_ago)
+        signed_change_5m = index_price - price_5min_ago  # positive = rising
 
         # Threshold: 10 points for SPX, scale for other indices
         threshold_5m = 10.0 if index_symbol == 'SPX' else 50.0
@@ -1268,6 +1269,7 @@ def check_market_momentum(index_price, index_symbol='SPX', lookback_minutes=5):
             return False, reason
 
         # Also check 1-minute spike
+        change_1m = 0
         if len(df) >= 2:
             price_1min_ago = df.iloc[-2]['Close']
             change_1m = abs(index_price - price_1min_ago)
@@ -1279,6 +1281,27 @@ def check_market_momentum(index_price, index_symbol='SPX', lookback_minutes=5):
                          f"(threshold: {threshold_1m:.0f} pts) - spike detected")
                 log(f"❌ {reason}")
                 return False, reason
+
+        # DIRECTIONAL MOMENTUM CHECK (2026-02-26):
+        # Block if market is moving against trade direction over 5 minutes
+        # Threshold: 4 pts for SPX (smaller than absolute check — catches sustained drift)
+        if trade_direction and trade_direction != 'NEUTRAL':
+            adverse_threshold = 4.0 if index_symbol == 'SPX' else 20.0
+
+            if trade_direction == 'BULLISH' and signed_change_5m < -adverse_threshold:
+                reason = (f"{index_symbol} dropped {abs(signed_change_5m):.1f} pts in {lookback_minutes}min "
+                         f"while trade is BULLISH (sell PUTs) — adverse momentum, skip")
+                log(f"❌ {reason}")
+                return False, reason
+
+            if trade_direction == 'BEARISH' and signed_change_5m > adverse_threshold:
+                reason = (f"{index_symbol} rose {signed_change_5m:.1f} pts in {lookback_minutes}min "
+                         f"while trade is BEARISH (sell CALLs) — adverse momentum, skip")
+                log(f"❌ {reason}")
+                return False, reason
+
+            log(f"✅ Directional momentum OK: {trade_direction} trade, "
+                f"{index_symbol} moved {signed_change_5m:+.1f} pts in {lookback_minutes}min")
 
         log(f"✅ Market momentum acceptable: 5m change {change_5m:.1f} pts, "
             f"1m change {change_1m:.1f} pts")
@@ -2051,6 +2074,58 @@ try:
         long_sym  = INDEX_CONFIG.format_option_symbol(exp_short, opt_type, long_strike)
         log(f"Placing {setup['strategy']} SPREAD {short_strike}/{long_strike}{'C' if is_call else 'P'}")
 
+    # === GEX PIN RE-CHECK AT ENTRY (2026-02-26) ===
+    # The GEX pin was calculated earlier — by now SPX may have moved.
+    # Re-fetch price and recalculate pin. If pin shifted significantly,
+    # the trade setup is stale and we should abort.
+    if pin_override is None:  # Only re-check if using real GEX pin (not override)
+        fresh_index_price = get_price(INDEX_CONFIG.index_symbol)
+        if fresh_index_price and fresh_index_price > (INDEX_CONFIG.index_symbol == 'DJX' and 100 or 1000):
+            fresh_index_price = round(fresh_index_price)
+        else:
+            # Fallback to ETF
+            etf_price = get_price(INDEX_CONFIG.etf_symbol)
+            if etf_price and etf_price > 10:
+                fresh_index_price = round(etf_price * INDEX_CONFIG.etf_multiplier)
+            else:
+                fresh_index_price = index_price  # Can't fetch, use original
+
+        price_drift = abs(fresh_index_price - index_price)
+        log(f"GEX re-check: original {INDEX_CONFIG.code}={index_price}, now={fresh_index_price} (drift={price_drift:.0f} pts)")
+
+        # If price drifted significantly, recalculate pin
+        drift_threshold = 5 if INDEX_CONFIG.code == 'SPX' else 25  # Meaningful move
+        if price_drift >= drift_threshold:
+            log(f"Price drifted {price_drift:.0f} pts — recalculating GEX pin...")
+            fresh_pin = calculate_gex_pin(fresh_index_price)
+
+            if fresh_pin is None:
+                log(f"GEX pin recalculation failed — using original pin {pin_price}")
+            else:
+                pin_drift = abs(fresh_pin - pin_price)
+                log(f"GEX pin: original={pin_price}, fresh={fresh_pin} (pin drift={pin_drift:.0f} pts)")
+
+                # If pin shifted significantly, the trade setup is stale
+                pin_shift_threshold = 10 if INDEX_CONFIG.code == 'SPX' else 50
+                if pin_drift >= pin_shift_threshold:
+                    log(f"GEX pin shifted {pin_drift:.0f} pts (threshold {pin_shift_threshold}) — trade setup stale, NO TRADE")
+                    send_discord_skip_alert(f"GEX pin shifted {pin_drift:.0f} pts (was {pin_price}, now {fresh_pin})", run_data)
+                    raise SystemExit
+
+                # Re-evaluate setup with fresh data
+                fresh_setup = get_gex_trade_setup(fresh_pin, fresh_index_price, vix, index_symbol=INDEX_CONFIG.code)
+                if fresh_setup['strategy'] != setup['strategy'] or fresh_setup.get('direction') != setup.get('direction'):
+                    log(f"Trade setup changed: was {setup['strategy']}/{setup.get('direction')}, "
+                        f"now {fresh_setup['strategy']}/{fresh_setup.get('direction')} — NO TRADE (stale)")
+                    send_discord_skip_alert(
+                        f"Setup changed: {setup['strategy']} → {fresh_setup['strategy']} "
+                        f"(pin moved {pin_price}→{fresh_pin})", run_data)
+                    raise SystemExit
+
+                log(f"✅ GEX pin re-check passed: setup still valid ({setup['strategy']}/{setup.get('direction')})")
+        else:
+            log(f"✅ GEX price drift {price_drift:.0f} pts < {drift_threshold} — pin re-check not needed")
+
     # === EXPECTED CREDIT FETCHING (must happen BEFORE spread quality check) ===
     if setup['strategy'] == 'IC':
         # IC: Get credit for BOTH spreads (calls + puts)
@@ -2105,7 +2180,9 @@ try:
     log(f"✅ {buffer_reason}")
 
     # FIX #4: Market momentum filter (avoid fast-moving markets)
-    is_safe, momentum_reason = check_market_momentum(index_price, INDEX_CONFIG.index_symbol)
+    # ENHANCEMENT (2026-02-26): Now checks directional momentum against trade direction
+    trade_direction = setup.get('direction', None)
+    is_safe, momentum_reason = check_market_momentum(index_price, INDEX_CONFIG.index_symbol, trade_direction=trade_direction)
     if not is_safe:
         log(f"❌ {momentum_reason} — NO TRADE")
         send_discord_skip_alert(f"Market momentum: {momentum_reason}", run_data)
@@ -2157,6 +2234,51 @@ try:
         raise SystemExit  # Exit BEFORE placing order (safe)
 
     log(f"Position limit check passed: {active_positions}/{MAX_DAILY_POSITIONS} positions")
+
+    # === OBSERVATION PERIOD (PRE-TRADE RISK FILTER) ===
+    # Watch price action for 1-2 minutes before placing order
+    # Detects dangerous conditions: high volatility, emergency stop territory, choppy moves
+    if OBSERVATION_ENABLED:
+        log("=" * 80)
+        log("🔍 STARTING OBSERVATION PERIOD")
+        log(f"   Will monitor SPX for {OBSERVATION_PERIOD_SECONDS}s before placing order")
+        log("=" * 80)
+
+        # Initialize observation period with config
+        observer = ObservationPeriod({
+            'enabled': True,
+            'period_seconds': OBSERVATION_PERIOD_SECONDS,
+            'max_range_pct': OBSERVATION_MAX_RANGE_PCT,
+            'max_direction_changes': OBSERVATION_MAX_DIRECTION_CHANGES,
+            'emergency_stop_threshold': OBSERVATION_EMERGENCY_STOP_THRESHOLD,
+            'min_tick_interval': OBSERVATION_MIN_TICK_INTERVAL,
+        })
+
+        # Observe market conditions
+        is_safe, reason = observer.observe(
+            index_symbol=INDEX_CONFIG.index_symbol,
+            entry_credit=expected_credit,
+            spread_width=abs(strikes[-1] - strikes[0]),  # Total spread width
+            direction=setup['direction']
+        )
+
+        # Log decision for analysis
+        observation_summary = observer.get_summary()
+        log_observation_decision(is_safe, reason, observation_summary)
+
+        if not is_safe:
+            log(f"🚫 OBSERVATION FAILED: {reason}")
+            log("NO TRADE - Market conditions too dangerous")
+            send_discord_skip_alert(
+                f"Observation period failed: {reason}",
+                {**run_data, **observation_summary}
+            )
+            raise SystemExit("Observation period detected dangerous conditions")
+        else:
+            log(f"✅ OBSERVATION PASSED: {reason}")
+            log("Proceeding with trade entry")
+    else:
+        log("🔍 Observation period disabled (OBSERVATION_ENABLED=false)")
 
     # === CALCULATE POSITION SIZE (AUTOSCALING WITH HALF-KELLY) ===
     # Calculate max risk per contract based on strategy type
