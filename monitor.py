@@ -627,7 +627,7 @@ def get_quotes(symbols):
             lambda: requests.get(
                 f"{BASE_URL}/markets/quotes",
                 headers=HEADERS,
-                params={"symbols": symbols_str, "greeks": "false"},
+                params={"symbols": symbols_str, "greeks": "true"},  # M2 FIX (2026-02-27): Enable Greeks for gamma acceleration detection
                 timeout=15
             ),
             description=f"Quote fetch ({symbols_str[:50]}...)"
@@ -654,33 +654,37 @@ def get_quotes(symbols):
         return None
 
 def get_positions():
-    """Fetch current account positions."""
+    """Fetch current account positions.
+
+    H4 FIX (2026-02-27): Returns empty list on failure instead of None
+    to prevent TypeError when callers iterate over result.
+    """
     try:
         r = requests.get(
             f"{BASE_URL}/accounts/{TRADIER_ACCOUNT_ID}/positions",
             headers=HEADERS,
             timeout=15
         )
-        
+
         if r.status_code != 200:
             log(f"Positions API error: {r.status_code}")
-            return None
-        
+            return []  # H4: empty list, not None
+
         data = r.json()
         positions = data.get("positions", {})
-        
+
         if positions == "null" or not positions:
             return []
-        
+
         pos_list = positions.get("position", [])
         if isinstance(pos_list, dict):
             pos_list = [pos_list]
-        
+
         return pos_list
-        
+
     except Exception as e:
         log(f"Positions fetch error: {e}")
-        return None
+        return []  # H4: empty list, not None
 
 def close_spread(order_data):
     """
@@ -728,20 +732,25 @@ def close_spread(order_data):
         log(f"  Defaulting to SPX config for exit")
         config = get_index_config('SPX')  # Safe fallback
 
+    # M4 NOTE (2026-02-27): Exit orders use market type intentionally for 0DTE urgency.
+    # A limit order that doesn't fill is worse than slippage on a decaying 0DTE position.
+    # If AON prevents fill, fallback to individual legs below handles it.
     data = {
         "class": "multileg",
         "symbol": config.option_root,  # SPXW or NDXW
         "type": "market",
         "duration": "day",
-        "tag": "GEXEXIT"
+        "tag": "GEXEXIT",
+        "option_requirement": "aon",  # C3 FIX (2026-02-27): All-or-None prevents partial fills / naked shorts
     }
-    
+
     for i, leg in enumerate(legs):
         data[f"option_symbol[{i}]"] = leg['option_symbol']
         data[f"side[{i}]"] = leg['side']
         data[f"quantity[{i}]"] = leg['quantity']
-    
+
     try:
+        # H1 FIX (2026-02-27): Use order_id instead of undefined 'symbol' variable
         r = retry_api_call(
             lambda: requests.post(
                 f"{BASE_URL}/accounts/{TRADIER_ACCOUNT_ID}/orders",
@@ -749,7 +758,7 @@ def close_spread(order_data):
                 data=data,
                 timeout=15
             ),
-            description=f"Exit order for {symbol}"
+            description=f"Exit order for {order_id}"
         )
 
         if r is None:
@@ -1091,13 +1100,19 @@ def check_and_close_positions():
 
     for order in orders[:]:  # Copy list for safe removal
         order_id = order.get('order_id')
-        entry_credit = float(order.get('entry_credit', 0))
+        # C1 FIX (2026-02-27): Validate entry_credit is a valid positive number (not NaN/inf)
+        try:
+            entry_credit = float(order.get('entry_credit', 0))
+        except (ValueError, TypeError):
+            log(f"⚠️ Non-numeric entry_credit for {order_id}: {order.get('entry_credit')} — skipping")
+            continue
+
         entry_time = order.get('entry_time', '')
         trailing_active = order.get('trailing_stop_active', False)
         best_profit_pct = order.get('best_profit_pct', 0)
 
-        if entry_credit <= 0:
-            log(f"Invalid entry credit for {order_id} — skipping")
+        if entry_credit <= 0 or entry_credit != entry_credit:  # NaN != NaN
+            log(f"Invalid entry credit for {order_id} ({entry_credit}) — skipping")
             continue
 
         # BUGFIX (2026-02-07): Skip positions already pending closure to prevent infinite loop.
@@ -1109,20 +1124,50 @@ def check_and_close_positions():
             max_closure_attempts = 5  # Max retry attempts before giving up
 
             if closure_attempts >= max_closure_attempts:
-                log(f"⚠️  Position {order_id} ABANDONED after {closure_attempts} close attempts")
-                log(f"   MANUAL INTERVENTION REQUIRED - check broker directly")
-                # Send Discord alert for manual intervention
-                if DISCORD_ENABLED and DISCORD_WEBHOOK_URL:
-                    msg = {
-                        "embeds": [{
-                            "title": f"🚨 POSITION STUCK - MANUAL CLOSE REQUIRED",
-                            "description": f"Order {order_id} failed to close after {closure_attempts} attempts.\n"
-                                           f"**Check Tradier directly and close manually.**",
-                            "color": 0xff0000,
-                            "timestamp": datetime.datetime.utcnow().isoformat()
-                        }]
-                    }
-                    _send_to_webhook(DISCORD_WEBHOOK_URL, msg, message_type="crash")
+                # BUGFIX (2026-02-09): Skip abandoned orders silently
+                # After 5 failed close attempts, stop all logging and alerts
+                # Position will expire naturally if 0DTE, or can be closed manually
+
+                if not order.get('abandoned', False):
+                    # First time reaching max attempts - log and alert ONCE
+                    log(f"⚠️  Position {order_id} ABANDONED after {closure_attempts} close attempts")
+                    log(f"   MANUAL INTERVENTION REQUIRED - check broker directly")
+                    log(f"   (Will expire naturally if 0DTE, or wait for broker to clear)")
+
+                    # Send Discord alert (ONCE ONLY)
+                    if DISCORD_ENABLED and DISCORD_WEBHOOK_URL:
+                        msg = {
+                            "embeds": [{
+                                "title": f"🚨 POSITION STUCK - MANUAL CLOSE REQUIRED",
+                                "description": f"Order {order_id} failed to close after {closure_attempts} attempts.\n"
+                                               f"**Will expire naturally if 0DTE. Check Tradier if needed.**",
+                                "color": 0xff0000,
+                                "timestamp": datetime.datetime.utcnow().isoformat()
+                            }]
+                        }
+                        _send_to_webhook(DISCORD_WEBHOOK_URL, msg, message_type="crash")
+
+                    # Mark as abandoned to prevent repeated logging/alerts
+                    order['abandoned'] = True
+                    order['abandoned_time'] = now.isoformat()
+                    orders_modified = True
+
+                # M7 FIX (2026-02-27): Auto-remove abandoned positions after 30 minutes
+                # Prevents stale entries from staying in orders.json forever
+                abandoned_time_str = order.get('abandoned_time')
+                if abandoned_time_str:
+                    try:
+                        abandoned_dt = datetime.datetime.fromisoformat(abandoned_time_str)
+                        if not abandoned_dt.tzinfo:
+                            abandoned_dt = ET.localize(abandoned_dt)
+                        abandoned_age = (now - abandoned_dt).total_seconds()
+                        if abandoned_age >= 1800:  # 30 minutes
+                            log(f"🗑️ Auto-removing abandoned position {order_id} (abandoned {int(abandoned_age)}s ago)")
+                            remove_order(order_id, verified_closed_at_broker=False, reason="abandoned_auto_cleanup")
+                    except (ValueError, TypeError):
+                        pass  # Can't parse time — leave it
+
+                # Skip this order silently (already abandoned)
                 continue
 
             log(f"⏳ Position {order_id} pending closure (attempt {closure_attempts}/{max_closure_attempts})")
@@ -1130,11 +1175,23 @@ def check_and_close_positions():
             verified = verify_position_closed_at_broker(order)
 
             # BUGFIX (2026-02-07): For after-hours 0DTE, force removal after 4:15 PM
+            # H3 FIX (2026-02-27): Only force-remove if actually 0DTE (same-day expiration)
             if not verified and now.hour >= 16:
+                is_0dte = True  # Default assumption
+                entry_time_str = order.get('entry_time', '')
+                if entry_time_str:
+                    try:
+                        entry_date = entry_time_str.split(' ')[0].split('T')[0]
+                        today_date = now.strftime('%Y-%m-%d')
+                        is_0dte = (entry_date == today_date)
+                    except (IndexError, ValueError):
+                        pass  # Assume 0DTE if can't parse
                 minutes_after_close = (now.hour - 16) * 60 + now.minute
-                if minutes_after_close >= 15:
+                if minutes_after_close >= 15 and is_0dte:
                     log(f"⏰ Post-market override: {order_id} expired 0DTE, forcing removal")
                     verified = True
+                elif minutes_after_close >= 15 and not is_0dte:
+                    log(f"⚠️ Post-market: {order_id} is NOT 0DTE (entry {entry_time_str}) — keeping in tracking")
 
             if verified:
                 # BUGFIX (2026-02-07): Now update trade log ONLY on confirmed closure
@@ -1176,9 +1233,14 @@ def check_and_close_positions():
 
             if spx_price > 0:
                 # BUGFIX (2026-01-10): Parse strikes string to list
+                # M1 FIX (2026-02-27): Wrap float() in try/except for corrupt data
                 strikes_raw = order.get('strikes', [])
                 if isinstance(strikes_raw, str) and '/' in strikes_raw:
-                    strikes = [float(s.strip()) for s in strikes_raw.split('/')]
+                    try:
+                        strikes = [float(s.strip()) for s in strikes_raw.split('/')]
+                    except (ValueError, TypeError):
+                        log(f"⚠️ Could not parse strikes '{strikes_raw}' for {order_id}")
+                        strikes = []
                 elif isinstance(strikes_raw, list):
                     strikes = strikes_raw
                 else:
@@ -1458,7 +1520,7 @@ def check_and_close_positions():
 
         # GEX spreads: Use existing logic
         elif now.hour == AUTO_CLOSE_HOUR and now.minute >= AUTO_CLOSE_MINUTE and not is_holding:
-            exit_reason = "Auto-close 3:50 PM (0DTE)"
+            exit_reason = "Auto-close 3:30 PM (0DTE)"  # M3 FIX: was "3:50" but config is 3:30
 
         # Check after 4 PM — assume expired worthless if still open
         elif now.hour >= 16:
@@ -1547,8 +1609,16 @@ def check_and_close_positions():
                 # show in broker's system even though they're worthless expired options.
                 # Allow removal after 4:15 PM without strict broker verification.
                 if not verified and is_after_hours:
+                    # H3 FIX (2026-02-27): Only force-remove if actually 0DTE
+                    is_0dte_exit = True
+                    if entry_time:
+                        try:
+                            entry_date_exit = entry_time.split(' ')[0].split('T')[0]
+                            is_0dte_exit = (entry_date_exit == now.strftime('%Y-%m-%d'))
+                        except (IndexError, ValueError):
+                            pass
                     minutes_after_close = (now.hour - 16) * 60 + now.minute
-                    if minutes_after_close >= 15:
+                    if minutes_after_close >= 15 and is_0dte_exit:
                         log(f"⏰ Post-market override: {order_id} expired 0DTE, forcing removal "
                             f"(market closed {minutes_after_close} min ago)")
                         verified = True

@@ -366,7 +366,8 @@ def check_and_remove_stale_lock():
             os.remove(LOCK_FILE)
             log(f"Removed unreadable lock file: {LOCK_FILE}")
             return True
-        except:
+        except OSError as e2:
+            log(f"Failed to remove lock file: {e2}")
             return False
 
 log(f"Scalper starting... (lock file: {LOCK_FILE})")
@@ -769,6 +770,13 @@ def calculate_gex_pin(index_price):
             log("GEX API returned empty options list")
             return None
 
+        # M5 FIX (2026-02-27): Validate option chain freshness
+        # Check that we have today's expiration data (stale chains = wrong GEX)
+        sample_exp = options[0].get('expiration_date', '') if options else ''
+        if sample_exp and sample_exp != today:
+            log(f"⚠️ GEX chain staleness: got expiration {sample_exp}, expected {today}")
+            log(f"   Chain may be from previous session — GEX peaks unreliable")
+
         # Calculate GEX by strike
         # GEX = gamma × open_interest × contract_multiplier × spot^2
         # Calls: positive GEX | Puts: negative GEX
@@ -977,11 +985,11 @@ def save_account_balance(data):
 
             # Atomic rename (POSIX guarantees atomicity)
             os.replace(temp_path, ACCOUNT_BALANCE_FILE)
-        except:
+        except Exception:
             # Clean up temp file on error
             try:
                 os.unlink(temp_path)
-            except:
+            except OSError:
                 pass
             raise
     except Exception as e:
@@ -2207,6 +2215,33 @@ try:
     limit_price = round(expected_credit * 0.95, 2)
     log(f"Limit order price: ${limit_price:.2f} (5% worse than mid ${expected_credit:.2f})")
 
+    # === H2 FIX (2026-02-27): DAILY LOSS LIMIT CHECK ===
+    # Block new entries if today's realized P&L exceeds loss threshold
+    DAILY_LOSS_LIMIT = -500  # Stop trading after -$500 daily loss
+    TRADE_LOG_FILE = f"{GAMMA_HOME}/data/trades.csv"
+    try:
+        today_str = datetime.datetime.now(ET).strftime('%Y-%m-%d')
+        daily_pnl = 0.0
+        if os.path.exists(TRADE_LOG_FILE):
+            with open(TRADE_LOG_FILE, 'r') as _f:
+                reader = csv.DictReader(_f)
+                for row in reader:
+                    if row.get('Timestamp_ET', '').startswith(today_str) and row.get('P/L_$'):
+                        try:
+                            daily_pnl += float(row['P/L_$'].replace('$', '').replace('+', ''))
+                        except (ValueError, TypeError):
+                            pass
+        if daily_pnl <= DAILY_LOSS_LIMIT:
+            log(f"⛔ DAILY LOSS LIMIT: Today's P&L ${daily_pnl:,.0f} <= ${DAILY_LOSS_LIMIT} — NO NEW TRADES")
+            send_discord_skip_alert(f"Daily loss limit hit (${daily_pnl:,.0f})", run_data)
+            raise SystemExit
+        elif daily_pnl < 0:
+            log(f"📊 Daily P&L: ${daily_pnl:,.0f} (limit: ${DAILY_LOSS_LIMIT})")
+    except SystemExit:
+        raise
+    except Exception as e:
+        log(f"Warning: Could not check daily P&L: {e} — proceeding with trade")
+
     # === CRITICAL FIX-1: CHECK POSITION LIMIT *BEFORE* PLACING ORDER ===
     # This prevents orphaned positions (order live but not tracked)
     ORDERS_FILE = f"{GAMMA_HOME}/data/orders_paper.json" if mode == "PAPER" else f"{GAMMA_HOME}/data/orders_live.json"
@@ -2234,6 +2269,32 @@ try:
         raise SystemExit  # Exit BEFORE placing order (safe)
 
     log(f"Position limit check passed: {active_positions}/{MAX_DAILY_POSITIONS} positions")
+
+    # === H5 FIX (2026-02-27): CHECK BUYING POWER BEFORE ORDER ===
+    # Verify account has sufficient margin for new position
+    try:
+        bp_response = requests.get(
+            f"{BASE_URL}accounts/{TRADIER_ACCOUNT_ID}/balances",
+            headers=HEADERS, timeout=10
+        )
+        if bp_response.status_code == 200:
+            balances = bp_response.json().get('balances', {})
+            # option_buying_power is the relevant field for options trades
+            buying_power = float(balances.get('option_buying_power', balances.get('buying_power', 0)))
+            # Max risk per spread = spread_width × 100 × contracts - credit received
+            spread_width = INDEX_CONFIG.base_spread_width
+            max_risk = spread_width * 100 * position_size
+            if buying_power < max_risk:
+                log(f"⛔ INSUFFICIENT BUYING POWER: ${buying_power:,.0f} < ${max_risk:,.0f} required")
+                send_discord_skip_alert(f"Buying power ${buying_power:,.0f} < ${max_risk:,.0f} needed", run_data)
+                raise SystemExit
+            log(f"✅ Buying power: ${buying_power:,.0f} (need ${max_risk:,.0f})")
+        else:
+            log(f"⚠️ Could not check buying power (HTTP {bp_response.status_code}) — proceeding")
+    except SystemExit:
+        raise
+    except Exception as e:
+        log(f"⚠️ Buying power check failed: {e} — proceeding with trade")
 
     # === OBSERVATION PERIOD (PRE-TRADE RISK FILTER) ===
     # Watch price action for 1-2 minutes before placing order
@@ -2298,7 +2359,7 @@ try:
         raise SystemExit
 
     # BUGFIX (2026-01-20): Load account balance for order tracking
-    # The autoscaling module loads it internally, but we need it for order_data dict
+    # M8 FIX (2026-02-27): Reload balance here (close to order save) to reduce staleness
     account_balance, _ = load_account_balance()
     log(f"💰 Account balance: ${account_balance:,.0f}")
 
@@ -2419,27 +2480,63 @@ try:
     # If not filled after timeout, cancel the order
     if credit is None or not order_filled:
         log(f"⏱️ Order NOT filled after {FILL_TIMEOUT}s — CANCELING to prevent late fill")
-        try:
-            cancel_response = requests.delete(
-                f"{BASE_URL}/accounts/{TRADIER_ACCOUNT_ID}/orders/{order_id}",
-                headers=HEADERS,
-                timeout=10
-            )
-            if cancel_response.status_code == 200:
-                log(f"✓ Order {order_id} canceled successfully")
-            else:
-                log(f"⚠️ Cancel request returned status {cancel_response.status_code}")
-                log(f"Response: {cancel_response.text}")
-        except Exception as e:
-            log(f"ERROR: Failed to cancel order {order_id}: {e}")
-            log(f"MANUAL INTERVENTION REQUIRED: Cancel order manually in Tradier")
 
-        log("No trade taken — unfilled order canceled")
-        send_discord_skip_alert(
-            f"Order unfilled after {FILL_TIMEOUT}s — canceled",
-            {**run_data, 'order_id': order_id, 'limit_price': limit_price}
-        )
-        raise SystemExit("Order unfilled and canceled")
+        # C2 FIX (2026-02-27): Verify cancel succeeded — retry up to 3 times
+        # Race condition: order can fill AFTER cancel request but BEFORE cancel processes
+        cancel_confirmed = False
+        for cancel_attempt in range(3):
+            try:
+                cancel_response = requests.delete(
+                    f"{BASE_URL}/accounts/{TRADIER_ACCOUNT_ID}/orders/{order_id}",
+                    headers=HEADERS,
+                    timeout=10
+                )
+                if cancel_response.status_code == 200:
+                    log(f"✓ Order {order_id} cancel request sent (attempt {cancel_attempt + 1})")
+                else:
+                    log(f"⚠️ Cancel attempt {cancel_attempt + 1} returned status {cancel_response.status_code}")
+            except Exception as e:
+                log(f"ERROR: Cancel attempt {cancel_attempt + 1} failed: {e}")
+
+            # Verify order is actually canceled (not filled in the meantime)
+            time.sleep(3)
+            try:
+                verify_r = requests.get(
+                    f"{BASE_URL}/accounts/{TRADIER_ACCOUNT_ID}/orders/{order_id}",
+                    headers=HEADERS, timeout=10
+                )
+                if verify_r.status_code == 200:
+                    final_status = verify_r.json().get("order", {}).get("status", "")
+                    final_fill = verify_r.json().get("order", {}).get("avg_fill_price")
+                    log(f"   Post-cancel status: {final_status}, fill_price: {final_fill}")
+
+                    if final_status == "canceled":
+                        cancel_confirmed = True
+                        log(f"✓ Order {order_id} confirmed CANCELED")
+                        break
+                    elif final_status == "filled":
+                        # Order filled after our timeout — treat as a fill, NOT a cancel
+                        credit = abs(float(final_fill)) if final_fill else expected_credit
+                        order_filled = True
+                        log(f"⚠️ Order {order_id} FILLED after cancel attempt at ${credit:.2f}")
+                        log(f"   Treating as filled — will track position normally")
+                        break
+                    else:
+                        log(f"   Status '{final_status}' — retrying cancel...")
+            except Exception as e:
+                log(f"   Cancel verify failed: {e}")
+
+        if not cancel_confirmed and not order_filled:
+            log(f"🚨 COULD NOT CONFIRM CANCEL for order {order_id}")
+            log(f"MANUAL INTERVENTION REQUIRED: Check Tradier for order {order_id}")
+
+        if not order_filled:
+            log("No trade taken — unfilled order canceled")
+            send_discord_skip_alert(
+                f"Order unfilled after {FILL_TIMEOUT}s — canceled",
+                {**run_data, 'order_id': order_id, 'limit_price': limit_price}
+            )
+            raise SystemExit("Order unfilled and canceled")
 
     # Verify we got a valid credit
     if credit is None or credit == 0:
@@ -2460,31 +2557,9 @@ try:
     log(f"FINAL {int((1-tp_pct)*100)}% PROFIT TARGET → Close at ${tp_price:.2f}  →  +${tp_profit:.0f} profit")
     log(f"FINAL 10% STOP LOSS → Close at ${sl_price:.2f}  →  -${sl_loss:.0f} loss")
 
-    # Log the successful placement decision
-    reason = f"{setup['description']} | Pin at {int(pin_price)}, SPX at {int(index_price)}, VIX {vix:.1f}"
-    decision_logger.log_placed(setup['confidence'], credit, reason)
-
-    # === DISCORD ENTRY ALERT ===
-    send_discord_entry_alert(setup, credit, strikes, tp_pct, order_id)
-    log("Discord entry alert sent" if DISCORD_ENABLED else "Discord alerts disabled")
-
-    # NOTE: OCO/exit management handled by monitor.py - no bracket orders here
-
-    # === LOGGING ===
-    tp_target_pct = int((1 - tp_pct) * 100)  # 50% or 70%
-    if not os.path.exists(TRADE_LOG_FILE):
-        with open(TRADE_LOG_FILE, 'w', newline='') as f:
-            csv.writer(f).writerow(["Timestamp_ET","Trade_ID","Account_ID","Strategy","Strikes","Entry_Credit",
-                                  "Confidence","TP%","Exit_Time","Exit_Value","P/L_$","P/L_%","Exit_Reason","Duration_Min"])
-    with open(TRADE_LOG_FILE, 'a', newline='') as f:
-        csv.writer(f).writerow([
-            datetime.datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S'),
-            order_id, TRADIER_ACCOUNT_ID, setup['strategy'], "/".join(map(str, strikes)), f"{credit:.2f}",
-            setup['confidence'], f"{tp_target_pct}%",
-            "", "", "", "", "", ""
-        ])
-
-    # === SAVE ORDER FOR MONITOR TRACKING ===
+    # === C4 FIX (2026-02-27): SAVE ORDER TO TRACKING IMMEDIATELY ===
+    # Must happen BEFORE Discord/CSV logging to minimize orphan window.
+    # If scalper crashes after fill but before save, position has no stop loss.
     # Note: existing_orders and ORDERS_FILE already loaded during position limit check above
 
     # Add new order with all tracking info
@@ -2536,6 +2611,26 @@ try:
     with open(ORDERS_FILE, 'w') as f:
         json.dump(existing_orders, f, indent=2)
     log(f"Order {order_id} saved to monitor tracking file")
+
+    # === LOGGING (moved AFTER order save for C4 fix) ===
+    reason = f"{setup['description']} | Pin at {int(pin_price)}, SPX at {int(index_price)}, VIX {vix:.1f}"
+    decision_logger.log_placed(setup['confidence'], credit, reason)
+
+    send_discord_entry_alert(setup, credit, strikes, tp_pct, order_id)
+    log("Discord entry alert sent" if DISCORD_ENABLED else "Discord alerts disabled")
+
+    tp_target_pct = int((1 - tp_pct) * 100)
+    if not os.path.exists(TRADE_LOG_FILE):
+        with open(TRADE_LOG_FILE, 'w', newline='') as f:
+            csv.writer(f).writerow(["Timestamp_ET","Trade_ID","Account_ID","Strategy","Strikes","Entry_Credit",
+                                  "Confidence","TP%","Exit_Time","Exit_Value","P/L_$","P/L_%","Exit_Reason","Duration_Min"])
+    with open(TRADE_LOG_FILE, 'a', newline='') as f:
+        csv.writer(f).writerow([
+            datetime.datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S'),
+            order_id, TRADIER_ACCOUNT_ID, setup['strategy'], "/".join(map(str, strikes)), f"{credit:.2f}",
+            setup['confidence'], f"{tp_target_pct}%",
+            "", "", "", "", "", ""
+        ])
 
     log("Trade complete — monitor.py will handle TP/SL exits.")
 
