@@ -641,6 +641,121 @@ def store_gex_polarity(nearby_peaks):
     log(f"GEX Polarity: GPI={polarity.gpi:+.3f} ({polarity.direction}), "
         f"Magnitude={polarity.magnitude/1e9:.1f}B ({polarity.confidence})")
 
+
+def _load_anthropic_api_key():
+    """Load Anthropic API key from environment files. Returns None if not found."""
+    from pathlib import Path
+    for env_file in ['/etc/gamma.env', '/etc/trader.env']:
+        if Path(env_file).exists():
+            with open(env_file) as f:
+                for line in f:
+                    if line.startswith('ANTHROPIC_API_KEY='):
+                        key = line.split('=', 1)[1].strip().strip('"').strip("'")
+                        if key:
+                            return key
+    return None
+
+
+def ai_scalp_veto(setup, index_price, pin_price, vix, run_data):
+    """AI veto for credit spread entries — asks Haiku if the GEX pin will hold.
+
+    Args:
+        setup: GEXTradeSetup dict with strategy, strikes, direction, confidence, description
+        index_price: Current index price
+        pin_price: GEX pin price
+        vix: Current VIX level
+        run_data: Dict with gex_top_peaks, gex_polarity_index, gex_magnitude, gex_direction, expected_move
+
+    Returns:
+        (should_skip: bool, reason: str) — True means SKIP the trade
+    """
+    try:
+        api_key = _load_anthropic_api_key()
+        if not api_key:
+            log("AI SCALP VETO: No API key found — ALLOW (fail-open)")
+            return False, "no_api_key"
+
+        import anthropic
+
+        # Build peaks description
+        peaks_text = ""
+        top_peaks = run_data.get('gex_top_peaks', [])
+        for i, (strike, gex, score) in enumerate(top_peaks):
+            dist = strike - index_price
+            side = "above" if dist > 0 else "below"
+            peaks_text += f"  #{i+1}: {int(strike)} ({gex/1e9:+.2f}B, {abs(dist):.0f} pts {side})\n"
+        if not peaks_text:
+            peaks_text = "  (no peaks available)\n"
+
+        # Distance and side
+        distance = index_price - pin_price
+        side = "above" if distance > 0 else "below"
+
+        # GEX polarity
+        gpi = run_data.get('gex_polarity_index', 0.0)
+        gex_dir = run_data.get('gex_direction', 'NEUTRAL')
+        gex_mag = run_data.get('gex_magnitude', 0)
+        expected_move = run_data.get('expected_move', 0)
+
+        # Strikes description
+        strikes_str = ", ".join(str(s) for s in setup['strikes']) if setup.get('strikes') else "N/A"
+
+        prompt = f"""You are a last-resort safety check for a 0DTE {INDEX_CONFIG.code} credit spread. A rule-based engine already validated this trade. Default to ENTER. Only SKIP if the pin is clearly broken.
+
+Trade: {setup['strategy']} — {setup['description']}
+Strikes: {strikes_str} | Direction: {setup.get('direction', 'N/A')} | Confidence: {setup.get('confidence', 'N/A')}
+{INDEX_CONFIG.code}: {index_price:.0f} | VIX: {vix:.1f} | Expected move: +/-{expected_move:.1f} pts
+
+GEX Pin: {int(pin_price)} ({abs(distance):.0f} pts {side} of price)
+GEX Polarity: GPI={gpi:+.3f} ({gex_dir}, magnitude {gex_mag/1e9:.1f}B)
+GEX Peaks (proximity-weighted):
+{peaks_text}
+SKIP ONLY when the pin is clearly broken — ALL of these must be true:
+1. Pin distance > expected move (magnet too far to pull price back)
+2. Dominant peak is weak (< 1.0B — no strong magnet)
+3. No gamma support near the short strikes (nothing to stop price blowing through)
+
+ENTER for everything else. Near-pin setups with a dominant peak > 1.0B are safe. Peaks bracketing price is ideal for IC. Minor polarity skew or moderate distance alone are not reasons to skip.
+
+Respond in this EXACT format (2 lines only):
+DECISION: [ENTER|SKIP]
+REASON: [One sentence]"""
+
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model='claude-sonnet-4-6',
+            max_tokens=120,
+            temperature=0.0,
+            messages=[{'role': 'user', 'content': prompt}],
+        )
+
+        text = response.content[0].text.strip()
+        log(f"AI SCALP VETO raw response: {text}")
+
+        # Parse response
+        decision = 'ENTER'  # fail-open default
+        reason = ''
+        for line in text.split('\n'):
+            line = line.strip()
+            if line.upper().startswith('DECISION:'):
+                val = line.split(':', 1)[1].strip().upper()
+                if val in ('ENTER', 'SKIP'):
+                    decision = val
+            elif line.upper().startswith('REASON:'):
+                reason = line.split(':', 1)[1].strip()
+
+        if decision == 'SKIP':
+            log(f"AI SCALP VETO: SKIP — {reason}")
+            return True, reason
+        else:
+            log(f"AI SCALP VETO: ENTER — {reason}")
+            return False, reason
+
+    except Exception as e:
+        log(f"AI SCALP VETO ERROR: {e} — ALLOW (fail-open)")
+        return False, f"error: {e}"
+
+
 def get_option_chain(index_symbol, option_type):
     """
     Fetch option chain from Tradier API for OTM spread analysis.
@@ -840,6 +955,7 @@ def calculate_gex_pin(index_price):
 
             # Log top 3 scored peaks BEFORE competing peaks detection
             sorted_scored = sorted(scored_peaks, key=lambda x: x[2], reverse=True)[:3]
+            run_data['gex_top_peaks'] = [(s, g, score) for s, g, score in sorted_scored]
             log(f"Top 3 proximity-weighted peaks:")
             for s, g, score in sorted_scored:
                 dist = abs(s - index_price)
@@ -1891,6 +2007,15 @@ try:
 
     log(f"Trade setup: {setup['description']} | Confidence: {setup['confidence']}")
     run_data['setup'] = f"{setup['description']} ({setup['confidence']})"
+
+    # === AI SCALP VETO (Haiku) — assess pin strength before entry ===
+    if setup['strategy'] != 'SKIP':
+        ai_skip, ai_reason = ai_scalp_veto(setup, index_price, pin_price, vix, run_data)
+        if ai_skip:
+            log(f"AI SCALP VETO: {ai_reason}")
+            decision_logger.log_rejected(f"AI scalp veto: {ai_reason}")
+            send_discord_skip_alert(f"AI scalp veto: {ai_reason}", run_data)
+            raise SystemExit
 
     if setup['strategy'] == 'SKIP':
         log("NO TRADE TODAY — GEX conditions not met, checking OTM spread fallback...")
