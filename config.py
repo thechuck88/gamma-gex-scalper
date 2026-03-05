@@ -71,3 +71,13 @@ DISCORD_TTL_DEFAULT = 2 * 3600       # 2 hours - default for other messages
 # Separate URLs for LIVE and PAPER modes to track each independently
 HEALTHCHECK_LIVE_URL = os.getenv("GAMMA_HEALTHCHECK_LIVE_URL", "")
 HEALTHCHECK_PAPER_URL = os.getenv("GAMMA_HEALTHCHECK_PAPER_URL", "")
+
+# ==================== OBSERVATION PERIOD ====================
+# Pre-trade risk filter - watches price action before entering
+# Detects dangerous conditions (high volatility, fast moves, emergency stop territory)
+OBSERVATION_ENABLED = os.getenv("GAMMA_OBSERVATION_ENABLED", "false").lower() == "true"
+OBSERVATION_PERIOD_SECONDS = int(os.getenv("GAMMA_OBSERVATION_PERIOD_SECONDS", "90"))  # 1.5 minutes
+OBSERVATION_MAX_RANGE_PCT = float(os.getenv("GAMMA_OBSERVATION_MAX_RANGE_PCT", "0.15"))  # 15% of spread width
+OBSERVATION_MAX_DIRECTION_CHANGES = int(os.getenv("GAMMA_OBSERVATION_MAX_DIRECTION_CHANGES", "5"))
+OBSERVATION_EMERGENCY_STOP_THRESHOLD = float(os.getenv("GAMMA_OBSERVATION_EMERGENCY_STOP_THRESHOLD", "0.40"))  # 40% loss
+OBSERVATION_MIN_TICK_INTERVAL = float(os.getenv("GAMMA_OBSERVATION_MIN_TICK_INTERVAL", "2.0"))  # seconds between price checks
