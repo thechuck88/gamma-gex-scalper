@@ -1,0 +1,69 @@
+backtest_with_trend_filters.py:88: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  data = yf.download('SPY', start=start_date, end=end_date, interval="5m", progress=False)
+backtest_with_trend_filters.py:88: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  data = yf.download('SPY', start=start_date, end=end_date, interval="5m", progress=False)
+backtest_with_trend_filters.py:88: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  data = yf.download('SPY', start=start_date, end=end_date, interval="5m", progress=False)
+backtest_with_trend_filters.py:88: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  data = yf.download('SPY', start=start_date, end=end_date, interval="5m", progress=False)
+backtest_with_trend_filters.py:88: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  data = yf.download('SPY', start=start_date, end=end_date, interval="5m", progress=False)
+backtest_with_trend_filters.py:88: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  data = yf.download('SPY', start=start_date, end=end_date, interval="5m", progress=False)
+backtest_with_trend_filters.py:88: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  data = yf.download('SPY', start=start_date, end=end_date, interval="5m", progress=False)
+backtest_with_trend_filters.py:88: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  data = yf.download('SPY', start=start_date, end=end_date, interval="5m", progress=False)
+backtest_with_trend_filters.py:88: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  data = yf.download('SPY', start=start_date, end=end_date, interval="5m", progress=False)
+backtest_with_trend_filters.py:88: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  data = yf.download('SPY', start=start_date, end=end_date, interval="5m", progress=False)
+backtest_with_trend_filters.py:88: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  data = yf.download('SPY', start=start_date, end=end_date, interval="5m", progress=False)
+backtest_with_trend_filters.py:88: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  data = yf.download('SPY', start=start_date, end=end_date, interval="5m", progress=False)
+backtest_with_trend_filters.py:88: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  data = yf.download('SPY', start=start_date, end=end_date, interval="5m", progress=False)
+backtest_with_trend_filters.py:88: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  data = yf.download('SPY', start=start_date, end=end_date, interval="5m", progress=False)
+backtest_with_trend_filters.py:88: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  data = yf.download('SPY', start=start_date, end=end_date, interval="5m", progress=False)
+backtest_with_trend_filters.py:88: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  data = yf.download('SPY', start=start_date, end=end_date, interval="5m", progress=False)
+backtest_with_trend_filters.py:88: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  data = yf.download('SPY', start=start_date, end=end_date, interval="5m", progress=False)
+backtest_with_trend_filters.py:88: FutureWarning: YF.download() has changed argument auto_adjust default to True
+  data = yf.download('SPY', start=start_date, end=end_date, interval="5m", progress=False)
+
+Running baseline (no filter)...
+Loaded 13907 snapshots from 2026-01-11 to present
+
+Running with ADX + momentum filter...
+Loaded 13907 snapshots from 2026-01-11 to present
+
+====================================================================================================
+GAMMA BACKTEST: With vs Without ADX + Momentum Trend Filters
+====================================================================================================
+
+Database: /root/gamma/data/gex_blackbox.db
+Period: Last 30 days (2026-02-10)
+Entry times: 09:36, 10:00, 10:30, 11:00, 11:30, 12:00, 12:30, 13:00
+VIX range: 13.0-20
+ADX threshold: 25
+Momentum threshold: 10 pts in 30 min
+
+====================================================================================================
+PERFORMANCE COMPARISON
+====================================================================================================
+
+Metric                         Without Filter       With Filter          Impact              
+----------------------------------------------------------------------------------------------------
+Total P&L                      $             3,001 $             3,126 $             +125 (+4.2%)
+Total Trades                                    347                  347                   +0 (+0.0%)
+Win Rate                                      45.2%                45.2%                +0.0%
+Profit Factor                                  1.98                 2.01                +0.03
+Emergency Stops                                  50                   50                   +0 (+0.0%)
+
+====================================================================================================
+
+TRADES FILTERED: 0
