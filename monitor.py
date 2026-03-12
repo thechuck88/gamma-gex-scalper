@@ -169,6 +169,12 @@ HEADERS = {
     "Accept": "application/json",
     "Authorization": f"Bearer {TRADIER_KEY}"
 }
+# Market data (quotes) should always use live API — sandbox returns stale/delayed data
+LIVE_HEADERS = {
+    "Accept": "application/json",
+    "Authorization": f"Bearer {TRADIER_LIVE_KEY}"
+}
+MARKET_DATA_URL = "https://api.tradier.com/v1"
 
 # Initialize Discord auto-delete with separate storage per mode
 discord_autodelete = None
@@ -623,10 +629,11 @@ def get_quotes(symbols):
         symbols_str = symbols
     
     try:
+        # Always use live API for market data quotes (sandbox returns stale/delayed data)
         r = retry_api_call(
             lambda: requests.get(
-                f"{BASE_URL}/markets/quotes",
-                headers=HEADERS,
+                f"{MARKET_DATA_URL}/markets/quotes",
+                headers=LIVE_HEADERS,
                 params={"symbols": symbols_str, "greeks": "true"},  # M2 FIX (2026-02-27): Enable Greeks for gamma acceleration detection
                 timeout=15
             ),
@@ -725,10 +732,11 @@ def close_spread(order_data):
     
     # Build order data (use index-specific option root)
     # HIGH-1 FIX (2026-01-13): Validate config retrieval, handle errors
+    _close_order_id = order_data.get('order_id', 'unknown')
     try:
         config = order_data.get('_config') or get_index_config(order_data.get('index_code', 'SPX'))
     except ValueError as e:
-        log(f"ERROR HIGH-1: Invalid index config for order {order_id}: {e}")
+        log(f"ERROR HIGH-1: Invalid index config for order {_close_order_id}: {e}")
         log(f"  Defaulting to SPX config for exit")
         config = get_index_config('SPX')  # Safe fallback
 
@@ -758,7 +766,7 @@ def close_spread(order_data):
                 data=data,
                 timeout=15
             ),
-            description=f"Exit order for {order_id}"
+            description=f"Exit order for {_close_order_id}"
         )
 
         if r is None:
@@ -1163,7 +1171,9 @@ def check_and_close_positions():
                         abandoned_age = (now - abandoned_dt).total_seconds()
                         if abandoned_age >= 1800:  # 30 minutes
                             log(f"🗑️ Auto-removing abandoned position {order_id} (abandoned {int(abandoned_age)}s ago)")
-                            remove_order(order_id, verified_closed_at_broker=False, reason="abandoned_auto_cleanup")
+                            # Abandoned positions have no broker-side position (quotes return None/errors).
+                            # After 30 min of being unable to get quotes, it's safe to remove from tracking.
+                            remove_order(order_id, verified_closed_at_broker=True, reason="abandoned_auto_cleanup_30min")
                     except (ValueError, TypeError):
                         pass  # Can't parse time — leave it
 
@@ -1225,9 +1235,9 @@ def check_and_close_positions():
         # CRITICAL: Check ITM risk (short strikes breached)
         try:
             # Fetch current SPX price
-            spx_quote = requests.get(f"{BASE_URL}/markets/quotes",
+            spx_quote = requests.get(f"{MARKET_DATA_URL}/markets/quotes",
                                     params={"symbols": "SPX"},
-                                    headers=HEADERS,
+                                    headers=LIVE_HEADERS,
                                     timeout=10).json()
             spx_price = float(spx_quote.get('quotes', {}).get('quote', {}).get('last', 0))
 
@@ -1257,7 +1267,16 @@ def check_and_close_positions():
                         strategy = order.get('strategy', '').lower()
 
                         itm_depth = 0
-                        if 'put' in strategy and spx_price < short_strike:
+                        # For IC (Iron Condor): short_indices [0,2] → call_short at 0, put_short at 2
+                        # Determine if this short strike is a put or call based on index position
+                        if strategy == 'ic':
+                            # IC strikes: [call_short, call_long, put_short, put_long]
+                            is_call_strike = idx < 2  # indices 0,1 are call side
+                            if is_call_strike and spx_price > short_strike:
+                                itm_depth = spx_price - short_strike
+                            elif not is_call_strike and spx_price < short_strike:
+                                itm_depth = short_strike - spx_price
+                        elif 'put' in strategy and spx_price < short_strike:
                             itm_depth = short_strike - spx_price
                         elif 'call' in strategy and spx_price > short_strike:
                             itm_depth = spx_price - short_strike
@@ -1344,9 +1363,9 @@ def check_and_close_positions():
                     # HIGH-3 FIX (2026-01-13): Log exceptions instead of silently swallowing them
                     # FIX (2026-01-22): Use VIX symbol (not $VIX.X) for real-time quotes
                     try:
-                        vix_quote = requests.get(f"{BASE_URL}/markets/quotes",
+                        vix_quote = requests.get(f"{MARKET_DATA_URL}/markets/quotes",
                                                params={"symbols": "VIX"},
-                                               headers=HEADERS,
+                                               headers=LIVE_HEADERS,
                                                timeout=10).json()
                         current_vix = float(vix_quote.get('quotes', {}).get('quote', {}).get('last', 99))
                     except Exception as e:

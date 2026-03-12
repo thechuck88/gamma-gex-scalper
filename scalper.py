@@ -266,6 +266,9 @@ if len(sys.argv) > 4 and sys.argv[4]:
 TRADIER_ACCOUNT_ID = LIVE_ACCOUNT_ID if mode == "REAL" else PAPER_ACCOUNT_ID
 TRADIER_KEY = TRADIER_LIVE_KEY if mode == "REAL" else TRADIER_SANDBOX_KEY
 BASE_URL = "https://api.tradier.com/v1/" if mode == "REAL" else "https://sandbox.tradier.com/v1/"
+# Market data (quotes, chains) should always use live API — sandbox returns stale/delayed data
+LIVE_HEADERS = {"Accept": "application/json", "Authorization": f"Bearer {TRADIER_LIVE_KEY}"}
+MARKET_DATA_URL = "https://api.tradier.com/v1/"
 HEADERS = {"Accept": "application/json", "Authorization": f"Bearer {TRADIER_KEY}"}
 
 # Set Discord webhook URL based on mode
@@ -1182,9 +1185,9 @@ def get_expected_credit(short_sym, long_sym):
     try:
         symbols = f"{short_sym},{long_sym}"
 
-        # Use retry wrapper for reliability
+        # Use retry wrapper for reliability — always use live API for market data quotes
         r = retry_api_call(
-            lambda: requests.get(f"{BASE_URL}/markets/quotes", headers=HEADERS, params={"symbols": symbols}, timeout=10),
+            lambda: requests.get(f"{MARKET_DATA_URL}markets/quotes", headers=LIVE_HEADERS, params={"symbols": symbols}, timeout=10),
             max_attempts=3,
             base_delay=1.0,
             description=f"Option quotes for {symbols}"
@@ -1202,10 +1205,14 @@ def get_expected_credit(short_sym, long_sym):
         if len(quotes) < 2:
             log(f"Warning: Only got {len(quotes)} quotes for {symbols}")
             return None
-        short_bid = float(quotes[0].get("bid") or 0)
-        short_ask = float(quotes[0].get("ask") or 0)
-        long_bid = float(quotes[1].get("bid") or 0)
-        long_ask = float(quotes[1].get("ask") or 0)
+        # Match quotes to symbols by symbol name (don't assume order matches request)
+        quote_map = {q.get('symbol', ''): q for q in quotes}
+        short_q = quote_map.get(short_sym, quotes[0])
+        long_q = quote_map.get(long_sym, quotes[1])
+        short_bid = float(short_q.get("bid") or 0)
+        short_ask = float(short_q.get("ask") or 0)
+        long_bid = float(long_q.get("bid") or 0)
+        long_ask = float(long_q.get("ask") or 0)
         short_mid = (short_bid + short_ask) / 2
         long_mid = (long_bid + long_ask) / 2
         credit = round(short_mid - long_mid, 2)
@@ -1231,8 +1238,9 @@ def check_spread_quality(short_sym, long_sym, expected_credit):
     """
     try:
         symbols = f"{short_sym},{long_sym}"
+        # Always use live API for market data quotes (sandbox returns stale data)
         r = retry_api_call(
-            lambda: requests.get(f"{BASE_URL}/markets/quotes", headers=HEADERS,
+            lambda: requests.get(f"{MARKET_DATA_URL}markets/quotes", headers=LIVE_HEADERS,
                                params={"symbols": symbols}, timeout=10),
             max_attempts=2,
             base_delay=0.5,
@@ -1261,9 +1269,8 @@ def check_spread_quality(short_sym, long_sym, expected_credit):
         long_ask = float(quotes[1].get("ask") or 0)
         long_spread = long_ask - long_bid
 
-        # Net spread (what we pay in slippage)
-        net_spread = short_spread - long_spread  # Short spread costs us, long spread saves us
-        net_spread = abs(net_spread)  # Take absolute value
+        # Net spread (total slippage exposure from both legs' bid-ask widths)
+        net_spread = short_spread + long_spread  # Both legs contribute to closing cost uncertainty
 
         # FIX #1: Progressive tolerance based on credit size
         if expected_credit < 1.00:
@@ -2032,7 +2039,7 @@ try:
             if spread_strikes:
                 # Get option chain for the appropriate side
                 option_type = 'put' if spread_strikes['side'] == 'PUT' else 'call'
-                chain_df = get_option_chain(index_symbol, option_type)
+                chain_df = get_option_chain(INDEX_CONFIG.index_symbol, option_type)
 
                 if chain_df is not None and not chain_df.empty:
                     # Get short strike quote (sell)
@@ -2061,13 +2068,10 @@ try:
                             # Override setup with single-sided OTM spread
                             if spread_strikes['side'] == 'PUT':
                                 setup = {
-                                    'strategy': 'OTM_SINGLE_SIDED',
+                                    'strategy': 'PUT',
                                     'confidence': 'MEDIUM',
                                     'description': f"OTM Fallback: {spread_strikes['direction']} PUT spread {spread_strikes['short_strike']}/{spread_strikes['long_strike']}",
-                                    'call_short': None,
-                                    'call_long': None,
-                                    'put_short': spread_strikes['short_strike'],
-                                    'put_long': spread_strikes['long_strike'],
+                                    'strikes': [spread_strikes['short_strike'], spread_strikes['long_strike']],
                                     'expected_credit': credit,
                                     'distance': spread_strikes['distance_otm'],
                                     'direction': spread_strikes['direction'],
@@ -2075,13 +2079,10 @@ try:
                                 }
                             else:  # CALL
                                 setup = {
-                                    'strategy': 'OTM_SINGLE_SIDED',
+                                    'strategy': 'CALL',
                                     'confidence': 'MEDIUM',
                                     'description': f"OTM Fallback: {spread_strikes['direction']} CALL spread {spread_strikes['short_strike']}/{spread_strikes['long_strike']}",
-                                    'call_short': spread_strikes['short_strike'],
-                                    'call_long': spread_strikes['long_strike'],
-                                    'put_short': None,
-                                    'put_long': None,
+                                    'strikes': [spread_strikes['short_strike'], spread_strikes['long_strike']],
                                     'expected_credit': credit,
                                     'distance': spread_strikes['distance_otm'],
                                     'direction': spread_strikes['direction'],
@@ -2775,7 +2776,7 @@ try:
         def get_otm_quotes(short_strike, long_strike, option_type):
             """Get quote for OTM spread."""
             try:
-                chain_df = get_option_chain(index_symbol, option_type)
+                chain_df = get_option_chain(INDEX_CONFIG.index_symbol, option_type)
                 if chain_df is None or chain_df.empty:
                     return 0.0
 
@@ -2805,56 +2806,23 @@ try:
             log(f"  Total credit: ${otm_setup['total_credit']:.2f}")
 
             # Check position limit (should have room for 1 more)
-            if len(existing_orders) >= MAX_OPEN_POSITIONS:
-                log(f"✗ Cannot place OTM: Already at max {MAX_OPEN_POSITIONS} positions")
+            if len(existing_orders) >= MAX_DAILY_POSITIONS:
+                log(f"✗ Cannot place OTM: Already at max {MAX_DAILY_POSITIONS} positions")
             else:
-                log("Placing OTM spread as second position...")
-
-                # Generate OTM order
+                # TODO: OTM alongside order placement not yet implemented.
+                # The OTM opportunity was identified but actual broker order placement
+                # (multi-leg IC via Tradier API) needs to be wired here before saving to tracking.
+                # Without placing the order first, saving to orders.json creates a phantom position.
                 strikes_info = otm_setup['strikes']
-                otm_order_id = f"otm_{datetime.datetime.now(ET).strftime('%Y%m%d_%H%M%S')}"
-
-                # Build OTM iron condor order
                 otm_strikes = [
                     strikes_info['call_spread']['short'],
                     strikes_info['call_spread']['long'],
                     strikes_info['put_spread']['short'],
                     strikes_info['put_spread']['long']
                 ]
-
-                log(f"OTM Iron Condor: {otm_strikes[2]}/{otm_strikes[3]} × {otm_strikes[0]}/{otm_strikes[1]}")
-
-                # Save OTM order to monitor
-                otm_order_data = {
-                    "order_id": otm_order_id,
-                    "entry_credit": otm_setup['total_credit'],
-                    "entry_time": datetime.datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S'),
-                    "strategy": "OTM_IRON_CONDOR",
-                    "strikes": "/".join(map(str, otm_strikes)),
-                    "direction": "NEUTRAL",
-                    "confidence": "MEDIUM",
-                    "option_symbols": [],  # Monitor will handle with strikes
-                    "short_indices": [0, 2],  # Call short and put short
-                    "tp_price": 0,  # Not used for OTM (holds to expiration)
-                    "sl_price": 0,  # Not used (monitor handles stops)
-                    "trailing_stop_active": False,
-                    "best_profit_pct": 0,
-                    "entry_distance": strikes_info['strike_distance'],
-                    "index_entry": index_price,
-                    "index_code": INDEX_CONFIG.code,
-                    "vix_entry": vix,
-                    "position_size": position_size,
-                    "account_balance": account_balance,
-                    "otm_lock_in_active": False  # For 50% lock-in tracking
-                }
-
-                existing_orders.append(otm_order_data)
-
-                with open(ORDERS_FILE, 'w') as f:
-                    json.dump(existing_orders, f, indent=2)
-
-                log(f"✓ OTM order {otm_order_id} added to monitor tracking")
-                log(f"Total positions: {len(existing_orders)}/{MAX_OPEN_POSITIONS}")
+                log(f"OTM Iron Condor identified: {otm_strikes[2]}/{otm_strikes[3]} × {otm_strikes[0]}/{otm_strikes[1]}")
+                log(f"  ⚠️ OTM alongside order placement NOT YET IMPLEMENTED — skipping broker order")
+                log(f"  Credit: ${otm_setup['total_credit']:.2f} | Distance: {strikes_info.get('strike_distance', 'N/A')} pts")
 
         else:
             log("✗ No valid OTM opportunity alongside GEX trade")
