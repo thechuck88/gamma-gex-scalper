@@ -62,6 +62,7 @@ from config import (
 )
 from threading import Timer
 from discord_autodelete import DiscordAutoDelete
+from ai_hold_advisor import ask_haiku_hold_or_close, clear_cooldown
 
 # Timezone
 ET = pytz.timezone('America/New_York')
@@ -89,6 +90,10 @@ TRAILING_TRIGGER_PCT = 0.30     # OPTIMIZATION: Activate at 30% profit (was 20%)
 TRAILING_LOCK_IN_PCT = 0.20     # OPTIMIZATION: Lock in 20% profit (was 12%) - proportionally adjusted
 TRAILING_DISTANCE_MIN = 0.10    # Minimum trail distance as profit rises (10%, was 8%)
 TRAILING_TIGHTEN_RATE = 0.4     # How fast it tightens (0.4 = every 2.5% gain, trail tightens 1%)
+
+# AI Hold Advisor (Haiku) — suppresses premature trailing stop / TP closes
+AI_HOLD_ADVISOR_ENABLED = True  # Ask Haiku before closing on trailing stop / profit target
+AI_HOLD_MIN_CONFIDENCE = 65     # Minimum confidence to accept HOLD decision
 
 # Stop loss grace period - let positions settle before triggering SL
 SL_GRACE_PERIOD_SEC = 540       # OPTIMIZATION #2: 9 minutes grace (allows 0DTE to work through initial gamma volatility)
@@ -582,6 +587,7 @@ def remove_order(order_id, verified_closed_at_broker=False, reason="unknown"):
 
     if len(orders) < original_count:
         save_orders(orders)
+        clear_cooldown(order_id)  # Clear AI hold advisor cooldown
         log(f"🗑️  POSITION REMOVED FROM TRACKING: {order_id}")
         log(f"   ✅ Verified closed at broker: YES")
         log(f"   Reason: {reason}")
@@ -1233,6 +1239,8 @@ def check_and_close_positions():
             continue
 
         # CRITICAL: Check ITM risk (short strikes breached)
+        spx_price = 0  # Default — set below on successful fetch
+        current_vix = 25  # Default — set below on successful fetch
         try:
             # Fetch current SPX price
             spx_quote = requests.get(f"{MARKET_DATA_URL}/markets/quotes",
@@ -1240,6 +1248,15 @@ def check_and_close_positions():
                                     headers=LIVE_HEADERS,
                                     timeout=10).json()
             spx_price = float(spx_quote.get('quotes', {}).get('quote', {}).get('last', 0))
+
+            # Fetch VIX alongside SPX (needed for AI hold advisor sigma calculation)
+            try:
+                _vix_q = requests.get(f"{MARKET_DATA_URL}/markets/quotes",
+                                      params={"symbols": "VIX"},
+                                      headers=LIVE_HEADERS, timeout=5).json()
+                current_vix = float(_vix_q.get('quotes', {}).get('quote', {}).get('last', 25))
+            except Exception:
+                current_vix = 25  # Reasonable default
 
             if spx_price > 0:
                 # BUGFIX (2026-01-10): Parse strikes string to list
@@ -1551,11 +1568,37 @@ def check_and_close_positions():
 
         # Check profit target (use progressive threshold)
         elif profit_pct >= progressive_tp_pct and not is_holding:
-            exit_reason = f"Profit Target ({progressive_tp_pct*100:.0f}%)"
+            _tp_reason = f"Profit Target ({progressive_tp_pct*100:.0f}%)"
+            # AI Hold Advisor: ask Haiku if we should hold for more theta decay
+            if AI_HOLD_ADVISOR_ENABLED and spx_price > 0:
+                _ai_decision, _ai_conf, _ai_reason = ask_haiku_hold_or_close(
+                    order, spx_price, current_vix if 'current_vix' in dir() else 99,
+                    _tp_reason, log_fn=log)
+                if _ai_decision == 'HOLD' and _ai_conf >= AI_HOLD_MIN_CONFIDENCE:
+                    log(f"🧠 AI HOLD: Suppressing {_tp_reason} — Haiku says HOLD ({_ai_conf}%): {_ai_reason}")
+                else:
+                    exit_reason = _tp_reason
+                    if _ai_decision == 'CLOSE':
+                        log(f"🧠 AI CLOSE: Confirming {_tp_reason} — Haiku agrees ({_ai_conf}%): {_ai_reason}")
+            else:
+                exit_reason = _tp_reason
 
         # Check trailing stop - if activated and profit drops below trailing level
         elif trailing_active and trailing_stop_level is not None and profit_pct <= trailing_stop_level:
-            exit_reason = f"Trailing Stop ({trailing_stop_level*100:.0f}% from peak {best_profit_pct*100:.0f}%)"
+            _trail_reason = f"Trailing Stop ({trailing_stop_level*100:.0f}% from peak {best_profit_pct*100:.0f}%)"
+            # AI Hold Advisor: ask Haiku if this is noise or real danger
+            if AI_HOLD_ADVISOR_ENABLED and spx_price > 0:
+                _ai_decision, _ai_conf, _ai_reason = ask_haiku_hold_or_close(
+                    order, spx_price, current_vix if 'current_vix' in dir() else 99,
+                    _trail_reason, log_fn=log)
+                if _ai_decision == 'HOLD' and _ai_conf >= AI_HOLD_MIN_CONFIDENCE:
+                    log(f"🧠 AI HOLD: Suppressing {_trail_reason} — Haiku says HOLD ({_ai_conf}%): {_ai_reason}")
+                else:
+                    exit_reason = _trail_reason
+                    if _ai_decision == 'CLOSE':
+                        log(f"🧠 AI CLOSE: Confirming {_trail_reason} — Haiku agrees ({_ai_conf}%): {_ai_reason}")
+            else:
+                exit_reason = _trail_reason
 
         # Check regular stop loss (only if trailing not active)
         # Grace period: don't trigger SL immediately, let position settle
