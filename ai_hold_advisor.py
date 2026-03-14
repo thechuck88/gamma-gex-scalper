@@ -251,7 +251,7 @@ def ask_haiku_hold_or_close(order, spx_price, vix, trigger_reason, log_fn=None):
         last_time, last_decision, last_spx = _last_call[order_id]
         spx_moved = abs(spx_price - last_spx) if last_spx > 0 else 0
         if now - last_time < _COOLDOWN_SEC and spx_moved < _COOLDOWN_SPX_MOVE:
-            _log(f"🧠 AI HOLD: Cooldown active for {order_id} ({_COOLDOWN_SEC}s) — using cached: {last_decision}")
+            _log(f"🧠 AI HOLD: Cooldown active for {order_id} ({_COOLDOWN_SEC}s) — using cached: {last_decision[0]} ({last_decision[1]}%)")
             return last_decision
         elif spx_moved >= _COOLDOWN_SPX_MOVE:
             _log(f"🧠 AI HOLD: Cache invalidated — SPX moved {spx_moved:.1f}pts since last call")
@@ -409,7 +409,13 @@ GEX (Gamma Exposure):
         # Max loss calculation
         try:
             strike_vals = [float(s.replace('C','').replace('P','')) for s in strikes_str.split('/')]
-            spread_width = abs(strike_vals[1] - strike_vals[0]) if len(strike_vals) >= 2 else 20
+            if is_ic and len(strike_vals) >= 4:
+                # IC: max of call side and put side widths
+                spread_width = max(abs(strike_vals[1] - strike_vals[0]), abs(strike_vals[3] - strike_vals[2]))
+            elif len(strike_vals) >= 2:
+                spread_width = abs(strike_vals[1] - strike_vals[0])
+            else:
+                spread_width = 20
         except (ValueError, IndexError):
             spread_width = 20
         max_loss_per_contract = (spread_width - entry_credit) * 100

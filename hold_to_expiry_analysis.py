@@ -306,15 +306,23 @@ def analyze_trades():
         breached, breach_time, breach_price, min_dist = check_strike_breach(
             bars, strikes_info, t['Timestamp_ET'])
 
-        # Calculate hold-to-expiry P&L
+        # Infer position size from actual P/L vs percentage
+        pl_pct_str = t.get('P/L_%', '0').replace('+', '').replace('%', '')
+        pl_pct_val = float(pl_pct_str) / 100 if pl_pct_str else 0
+        if abs(pl_pct_val) > 0.01 and abs(actual_pl) > 0:
+            position_size = max(1, round(actual_pl / (entry_credit * pl_pct_val * 100)))
+        else:
+            position_size = 1
+
+        # Calculate hold-to-expiry P&L (scaled to position size)
         if breached:
             # Worst case: max loss
-            max_loss = (strikes_info['spread_width'] - entry_credit) * 100
+            max_loss = (strikes_info['spread_width'] - entry_credit) * 100 * position_size
             hold_pl = -max_loss
             breach_str = f"YES"
         else:
             # Expired worthless: full credit collected
-            hold_pl = entry_credit * 100  # Per contract
+            hold_pl = entry_credit * 100 * position_size
             breach_str = "NO"
 
         missed = hold_pl - actual_pl
@@ -398,11 +406,19 @@ def analyze_trades():
 
         breached, _, _, _ = check_strike_breach(bars, strikes_info, t['Timestamp_ET'])
 
+        # Infer position size
+        pl_pct_str = t.get('P/L_%', '0').replace('+', '').replace('%', '')
+        pl_pct_val = float(pl_pct_str) / 100 if pl_pct_str else 0
+        if abs(pl_pct_val) > 0.01 and abs(actual_pl) > 0:
+            position_size = max(1, round(actual_pl / (entry_credit * pl_pct_val * 100)))
+        else:
+            position_size = 1
+
         if breached:
-            max_loss = (strikes_info['spread_width'] - entry_credit) * 100
+            max_loss = (strikes_info['spread_width'] - entry_credit) * 100 * position_size
             hold_pl = -max_loss
         else:
-            hold_pl = entry_credit * 100
+            hold_pl = entry_credit * 100 * position_size
 
         diff = hold_pl - actual_pl
         sl_actual += actual_pl

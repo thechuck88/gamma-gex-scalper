@@ -107,6 +107,8 @@ KALMAN_MAX_SUPPRESS_COUNT = 5          # After 5 consecutive suppressions (~15s)
 # Module-level Kalman tracker storage (order_id → tracker)
 _kalman_trackers = {}
 _kalman_suppress_counts = {}  # order_id → consecutive suppression count
+_ai_hold_counts = {}  # order_id → consecutive AI HOLD count (trailing/TP/SL)
+AI_HOLD_MAX_CONSECUTIVE = 10  # After 10 consecutive HOLDs (~5 min at 30s cooldown), force close
 
 # Stop loss grace period - let positions settle before triggering SL
 SL_GRACE_PERIOD_SEC = 540       # OPTIMIZATION #2: 9 minutes grace (allows 0DTE to work through initial gamma volatility)
@@ -603,6 +605,7 @@ def remove_order(order_id, verified_closed_at_broker=False, reason="unknown"):
         clear_cooldown(order_id)  # Clear AI hold advisor cooldown
         _kalman_trackers.pop(order_id, None)  # Clear Kalman tracker
         _kalman_suppress_counts.pop(order_id, None)  # Clear suppress counter
+        _ai_hold_counts.pop(order_id, None)  # Clear AI hold counter
         log(f"🗑️  POSITION REMOVED FROM TRACKING: {order_id}")
         log(f"   ✅ Verified closed at broker: YES")
         log(f"   Reason: {reason}")
@@ -1134,6 +1137,9 @@ def check_and_close_positions():
     _stale_suppress = [k for k in _kalman_suppress_counts if k not in _active_ids]
     for k in _stale_suppress:
         del _kalman_suppress_counts[k]
+    _stale_holds = [k for k in _ai_hold_counts if k not in _active_ids]
+    for k in _stale_holds:
+        del _ai_hold_counts[k]
 
     now = datetime.datetime.now(ET)
     orders_modified = False
@@ -1291,7 +1297,6 @@ def check_and_close_positions():
             spx_price = float(spx_quote.get('quotes', {}).get('quote', {}).get('last', 0))
 
             # Fetch VIX alongside SPX (needed for AI hold advisor sigma calculation)
-            _vix_fetch_ok = False
             try:
                 _vix_q = requests.get(f"{MARKET_DATA_URL}/markets/quotes",
                                       params={"symbols": "VIX"},
@@ -1364,9 +1369,10 @@ def check_and_close_positions():
         # This prevents late stop loss triggers when bid/ask spread widens
         profit_pct_sl = (entry_credit - ask_value) / entry_credit
 
-        # Reset Kalman suppress counter when not in SL territory (position recovered)
+        # Reset counters when not in SL territory (position recovered)
         if profit_pct_sl > -STOP_LOSS_PCT:
             _kalman_suppress_counts.pop(order_id, None)
+            _ai_hold_counts.pop(order_id, None)
 
         # Track best profit for trailing stop (use mid-price for profit target)
         if profit_pct > best_profit_pct:
@@ -1600,14 +1606,20 @@ def check_and_close_positions():
                     elif KALMAN_NOISE_FILTER_ENABLED and _kalman_noise < KALMAN_NOISE_DIRECT_THRESHOLD:
                         log(f"  📊 KALMAN DIRECT: {_sl_reason} — noise={_kalman_noise:.2f}x (clean signal)")
                         exit_reason = _sl_reason
+                    elif _ai_hold_counts.get(order_id, 0) >= AI_HOLD_MAX_CONSECUTIVE:
+                        log(f"🧠 AI MAX HOLD: {_sl_reason} — {_ai_hold_counts.get(order_id, 0)} consecutive HOLDs, forcing close")
+                        exit_reason = _sl_reason
+                        _ai_hold_counts[order_id] = 0
                     elif AI_HOLD_ADVISOR_ENABLED and spx_price > 0 and _vix_fetch_ok:
                         _ai_decision, _ai_conf, _ai_reason = ask_haiku_hold_or_close(
                             order, spx_price, current_vix,
                             _sl_reason, log_fn=log)
                         if _ai_decision == 'HOLD' and _ai_conf >= AI_HOLD_SL_MIN_CONFIDENCE:
-                            log(f"🧠 AI HOLD: Suppressing {_sl_reason} (noise={_kalman_noise:.2f}x) — Haiku ({_ai_conf}%): {_ai_reason}")
+                            _ai_hold_counts[order_id] = _ai_hold_counts.get(order_id, 0) + 1
+                            log(f"🧠 AI HOLD: Suppressing {_sl_reason} (noise={_kalman_noise:.2f}x) — Haiku ({_ai_conf}%): {_ai_reason} [{_ai_hold_counts[order_id]}/{AI_HOLD_MAX_CONSECUTIVE}]")
                         else:
                             exit_reason = _sl_reason
+                            _ai_hold_counts[order_id] = 0
                             if _ai_decision == 'CLOSE':
                                 log(f"🧠 AI CLOSE: Confirming {_sl_reason} (noise={_kalman_noise:.2f}x) — Haiku ({_ai_conf}%): {_ai_reason}")
                     else:
@@ -1649,15 +1661,22 @@ def check_and_close_positions():
         # Check profit target (use progressive threshold)
         elif profit_pct >= progressive_tp_pct and not is_holding:
             _tp_reason = f"Profit Target ({progressive_tp_pct*100:.0f}%)"
+            _hold_count = _ai_hold_counts.get(order_id, 0)
             # AI Hold Advisor: ask Haiku if we should hold for more theta decay
-            if AI_HOLD_ADVISOR_ENABLED and spx_price > 0 and _vix_fetch_ok:
+            if _hold_count >= AI_HOLD_MAX_CONSECUTIVE:
+                log(f"🧠 AI MAX HOLD: {_tp_reason} — {_hold_count} consecutive HOLDs, forcing close")
+                exit_reason = _tp_reason
+                _ai_hold_counts[order_id] = 0
+            elif AI_HOLD_ADVISOR_ENABLED and spx_price > 0 and _vix_fetch_ok:
                 _ai_decision, _ai_conf, _ai_reason = ask_haiku_hold_or_close(
                     order, spx_price, current_vix,
                     _tp_reason, log_fn=log)
                 if _ai_decision == 'HOLD' and _ai_conf >= AI_HOLD_MIN_CONFIDENCE:
-                    log(f"🧠 AI HOLD: Suppressing {_tp_reason} — Haiku says HOLD ({_ai_conf}%): {_ai_reason}")
+                    _ai_hold_counts[order_id] = _hold_count + 1
+                    log(f"🧠 AI HOLD: Suppressing {_tp_reason} — Haiku says HOLD ({_ai_conf}%): {_ai_reason} [{_hold_count+1}/{AI_HOLD_MAX_CONSECUTIVE}]")
                 else:
                     exit_reason = _tp_reason
+                    _ai_hold_counts[order_id] = 0
                     if _ai_decision == 'CLOSE':
                         log(f"🧠 AI CLOSE: Confirming {_tp_reason} — Haiku agrees ({_ai_conf}%): {_ai_reason}")
             else:
@@ -1666,15 +1685,22 @@ def check_and_close_positions():
         # Check trailing stop - if activated and profit drops below trailing level
         elif trailing_active and trailing_stop_level is not None and profit_pct <= trailing_stop_level:
             _trail_reason = f"Trailing Stop ({trailing_stop_level*100:.0f}% from peak {best_profit_pct*100:.0f}%)"
+            _hold_count = _ai_hold_counts.get(order_id, 0)
             # AI Hold Advisor: ask Haiku if this is noise or real danger
-            if AI_HOLD_ADVISOR_ENABLED and spx_price > 0 and _vix_fetch_ok:
+            if _hold_count >= AI_HOLD_MAX_CONSECUTIVE:
+                log(f"🧠 AI MAX HOLD: {_trail_reason} — {_hold_count} consecutive HOLDs, forcing close")
+                exit_reason = _trail_reason
+                _ai_hold_counts[order_id] = 0
+            elif AI_HOLD_ADVISOR_ENABLED and spx_price > 0 and _vix_fetch_ok:
                 _ai_decision, _ai_conf, _ai_reason = ask_haiku_hold_or_close(
                     order, spx_price, current_vix,
                     _trail_reason, log_fn=log)
                 if _ai_decision == 'HOLD' and _ai_conf >= AI_HOLD_MIN_CONFIDENCE:
-                    log(f"🧠 AI HOLD: Suppressing {_trail_reason} — Haiku says HOLD ({_ai_conf}%): {_ai_reason}")
+                    _ai_hold_counts[order_id] = _hold_count + 1
+                    log(f"🧠 AI HOLD: Suppressing {_trail_reason} — Haiku says HOLD ({_ai_conf}%): {_ai_reason} [{_hold_count+1}/{AI_HOLD_MAX_CONSECUTIVE}]")
                 else:
                     exit_reason = _trail_reason
+                    _ai_hold_counts[order_id] = 0
                     if _ai_decision == 'CLOSE':
                         log(f"🧠 AI CLOSE: Confirming {_trail_reason} — Haiku agrees ({_ai_conf}%): {_ai_reason}")
             else:
@@ -1735,14 +1761,20 @@ def check_and_close_positions():
                     # Layer 3: Clean signal — execute directly (real danger, no need for Haiku)
                     log(f"  📊 KALMAN DIRECT: {_sl_reason_reg} — noise={_kalman_noise:.2f}x (clean signal)")
                     exit_reason = _sl_reason_reg
+                elif _ai_hold_counts.get(order_id, 0) >= AI_HOLD_MAX_CONSECUTIVE:
+                    log(f"🧠 AI MAX HOLD: {_sl_reason_reg} — {_ai_hold_counts.get(order_id, 0)} consecutive HOLDs, forcing close")
+                    exit_reason = _sl_reason_reg
+                    _ai_hold_counts[order_id] = 0
                 elif AI_HOLD_ADVISOR_ENABLED and spx_price > 0 and _vix_fetch_ok:
                     # Layer 2: Normal noise — let Haiku evaluate
                     _ai_decision, _ai_conf, _ai_reason = ask_haiku_hold_or_close(
                         order, spx_price, current_vix, _sl_reason_reg, log_fn=log)
                     if _ai_decision == 'HOLD' and _ai_conf >= AI_HOLD_SL_MIN_CONFIDENCE:
-                        log(f"🧠 AI HOLD: Suppressing {_sl_reason_reg} (noise={_kalman_noise:.2f}x) — Haiku ({_ai_conf}%): {_ai_reason}")
+                        _ai_hold_counts[order_id] = _ai_hold_counts.get(order_id, 0) + 1
+                        log(f"🧠 AI HOLD: Suppressing {_sl_reason_reg} (noise={_kalman_noise:.2f}x) — Haiku ({_ai_conf}%): {_ai_reason} [{_ai_hold_counts[order_id]}/{AI_HOLD_MAX_CONSECUTIVE}]")
                     else:
                         exit_reason = _sl_reason_reg
+                        _ai_hold_counts[order_id] = 0
                         if _ai_decision == 'CLOSE':
                             log(f"🧠 AI CLOSE: Confirming {_sl_reason_reg} (noise={_kalman_noise:.2f}x) — Haiku ({_ai_conf}%): {_ai_reason}")
                 else:
