@@ -62,7 +62,7 @@ from config import (
 )
 from threading import Timer
 from discord_autodelete import DiscordAutoDelete
-from ai_hold_advisor import ask_haiku_hold_or_close, clear_cooldown
+from ai_hold_advisor import ask_haiku_hold_or_close, clear_cooldown, clear_stale_cooldowns
 
 # Timezone
 ET = pytz.timezone('America/New_York')
@@ -91,9 +91,10 @@ TRAILING_LOCK_IN_PCT = 0.20     # OPTIMIZATION: Lock in 20% profit (was 12%) - p
 TRAILING_DISTANCE_MIN = 0.10    # Minimum trail distance as profit rises (10%, was 8%)
 TRAILING_TIGHTEN_RATE = 0.4     # How fast it tightens (0.4 = every 2.5% gain, trail tightens 1%)
 
-# AI Hold Advisor (Haiku) — suppresses premature trailing stop / TP closes
-AI_HOLD_ADVISOR_ENABLED = True  # Ask Haiku before closing on trailing stop / profit target
-AI_HOLD_MIN_CONFIDENCE = 65     # Minimum confidence to accept HOLD decision
+# AI Hold Advisor (Haiku) — suppresses premature trailing stop / TP / SL closes
+AI_HOLD_ADVISOR_ENABLED = True  # Ask Haiku before closing on trailing stop / profit target / regular SL
+AI_HOLD_MIN_CONFIDENCE = 65     # Minimum confidence to accept HOLD on trailing/TP
+AI_HOLD_SL_MIN_CONFIDENCE = 75  # Higher bar for suppressing stop losses (more dangerous to hold)
 
 # Stop loss grace period - let positions settle before triggering SL
 SL_GRACE_PERIOD_SEC = 540       # OPTIMIZATION #2: 9 minutes grace (allows 0DTE to work through initial gamma volatility)
@@ -1109,6 +1110,9 @@ def check_and_close_positions():
     if not orders:
         return
 
+    # Clean up stale AI hold cooldowns for closed positions
+    clear_stale_cooldowns({o.get('order_id') for o in orders})
+
     now = datetime.datetime.now(ET)
     orders_modified = False
 
@@ -1376,18 +1380,7 @@ def check_and_close_positions():
 
                 # Check hold qualification if profit reached 80%
                 if profit_pct >= HOLD_PROFIT_THRESHOLD:
-                    # Get current VIX
-                    # HIGH-3 FIX (2026-01-13): Log exceptions instead of silently swallowing them
-                    # FIX (2026-01-22): Use VIX symbol (not $VIX.X) for real-time quotes
-                    try:
-                        vix_quote = requests.get(f"{MARKET_DATA_URL}/markets/quotes",
-                                               params={"symbols": "VIX"},
-                                               headers=LIVE_HEADERS,
-                                               timeout=10).json()
-                        current_vix = float(vix_quote.get('quotes', {}).get('quote', {}).get('last', 99))
-                    except Exception as e:
-                        log(f"⚠️  HIGH-3: VIX fetch failed for hold check: {e}")
-                        current_vix = 99  # If can't fetch, assume high VIX (don't hold)
+                    # Use current_vix already fetched above (line ~1252)
 
                     # Calculate time left to expiration (assume 4 PM expiration)
                     expiry_time = now.replace(hour=16, minute=0, second=0, microsecond=0)
@@ -1545,7 +1538,20 @@ def check_and_close_positions():
                         override_msg = f" [override: {override_reason}]" if should_override else ""
                         exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case){override_msg}"
                 elif profit_pct_sl <= -STOP_LOSS_PCT and position_age_sec >= SL_GRACE_PERIOD_SEC:
-                    exit_reason = f"Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
+                    _sl_reason = f"Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
+                    # AI Hold Advisor: most SL triggers on 0DTE are bid/ask noise, not real danger
+                    if AI_HOLD_ADVISOR_ENABLED and spx_price > 0:
+                        _ai_decision, _ai_conf, _ai_reason = ask_haiku_hold_or_close(
+                            order, spx_price, current_vix,
+                            _sl_reason, log_fn=log)
+                        if _ai_decision == 'HOLD' and _ai_conf >= AI_HOLD_SL_MIN_CONFIDENCE:
+                            log(f"🧠 AI HOLD: Suppressing {_sl_reason} — Haiku says HOLD ({_ai_conf}%): {_ai_reason}")
+                        else:
+                            exit_reason = _sl_reason
+                            if _ai_decision == 'CLOSE':
+                                log(f"🧠 AI CLOSE: Confirming {_sl_reason} — Haiku agrees ({_ai_conf}%): {_ai_reason}")
+                    else:
+                        exit_reason = _sl_reason
                 elif profit_pct_sl <= -STOP_LOSS_PCT:
                     grace_remaining = SL_GRACE_PERIOD_SEC - position_age_sec
                     log(f"  ⏳ SL triggered but in grace period ({grace_remaining:.0f}s remaining) - holding")
@@ -1554,9 +1560,23 @@ def check_and_close_positions():
                     current_value = 0.0
                     exit_reason = "OTM Expiration"
 
-        # GEX spreads: Use existing logic
+        # 3:55 PM hard-close safety net — bypasses Haiku, ensures positions close before expiry
+        elif now.hour == 15 and now.minute >= 55 and not is_holding:
+            exit_reason = "Hard close 3:55 PM (safety net)"
+
+        # GEX spreads: Auto-close — let Haiku evaluate if position should hold to expiry
         elif now.hour == AUTO_CLOSE_HOUR and now.minute >= AUTO_CLOSE_MINUTE and not is_holding:
-            exit_reason = "Auto-close 3:30 PM (0DTE)"  # M3 FIX: was "3:50" but config is 3:30
+            _auto_reason = "Auto-close 3:30 PM (0DTE)"
+            if AI_HOLD_ADVISOR_ENABLED and spx_price > 0:
+                _ai_decision, _ai_conf, _ai_reason = ask_haiku_hold_or_close(
+                    order, spx_price, current_vix,
+                    _auto_reason, log_fn=log)
+                if _ai_decision == 'HOLD' and _ai_conf >= AI_HOLD_MIN_CONFIDENCE:
+                    log(f"🧠 AI HOLD: Suppressing {_auto_reason} — Haiku says HOLD ({_ai_conf}%): {_ai_reason}")
+                else:
+                    exit_reason = _auto_reason
+            else:
+                exit_reason = _auto_reason
 
         # Check after 4 PM — assume expired worthless if still open
         elif now.hour >= 16:
@@ -1572,7 +1592,7 @@ def check_and_close_positions():
             # AI Hold Advisor: ask Haiku if we should hold for more theta decay
             if AI_HOLD_ADVISOR_ENABLED and spx_price > 0:
                 _ai_decision, _ai_conf, _ai_reason = ask_haiku_hold_or_close(
-                    order, spx_price, current_vix if 'current_vix' in dir() else 99,
+                    order, spx_price, current_vix,
                     _tp_reason, log_fn=log)
                 if _ai_decision == 'HOLD' and _ai_conf >= AI_HOLD_MIN_CONFIDENCE:
                     log(f"🧠 AI HOLD: Suppressing {_tp_reason} — Haiku says HOLD ({_ai_conf}%): {_ai_reason}")
@@ -1589,7 +1609,7 @@ def check_and_close_positions():
             # AI Hold Advisor: ask Haiku if this is noise or real danger
             if AI_HOLD_ADVISOR_ENABLED and spx_price > 0:
                 _ai_decision, _ai_conf, _ai_reason = ask_haiku_hold_or_close(
-                    order, spx_price, current_vix if 'current_vix' in dir() else 99,
+                    order, spx_price, current_vix,
                     _trail_reason, log_fn=log)
                 if _ai_decision == 'HOLD' and _ai_conf >= AI_HOLD_MIN_CONFIDENCE:
                     log(f"🧠 AI HOLD: Suppressing {_trail_reason} — Haiku says HOLD ({_ai_conf}%): {_ai_reason}")
