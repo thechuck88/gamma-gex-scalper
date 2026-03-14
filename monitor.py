@@ -101,10 +101,12 @@ AI_HOLD_SL_MIN_CONFIDENCE = 75  # Higher bar for suppressing stop losses (more d
 KALMAN_NOISE_FILTER_ENABLED = True   # Enable Kalman filtering of spread prices
 KALMAN_NOISE_SUPPRESS_THRESHOLD = 3.0  # noise_level > 3.0 → suppress stop (extreme noise)
 KALMAN_NOISE_DIRECT_THRESHOLD = 0.7    # noise_level < 0.7 → execute directly (clean signal)
+KALMAN_MAX_SUPPRESS_COUNT = 5          # After 5 consecutive suppressions (~15s), force stop through
 # Between 0.7 and 3.0 → Haiku evaluates (normal operation)
 
 # Module-level Kalman tracker storage (order_id → tracker)
 _kalman_trackers = {}
+_kalman_suppress_counts = {}  # order_id → consecutive suppression count
 
 # Stop loss grace period - let positions settle before triggering SL
 SL_GRACE_PERIOD_SEC = 540       # OPTIMIZATION #2: 9 minutes grace (allows 0DTE to work through initial gamma volatility)
@@ -600,6 +602,7 @@ def remove_order(order_id, verified_closed_at_broker=False, reason="unknown"):
         save_orders(orders)
         clear_cooldown(order_id)  # Clear AI hold advisor cooldown
         _kalman_trackers.pop(order_id, None)  # Clear Kalman tracker
+        _kalman_suppress_counts.pop(order_id, None)  # Clear suppress counter
         log(f"🗑️  POSITION REMOVED FROM TRACKING: {order_id}")
         log(f"   ✅ Verified closed at broker: YES")
         log(f"   Reason: {reason}")
@@ -1124,10 +1127,13 @@ def check_and_close_positions():
     # Clean up stale AI hold cooldowns for closed positions
     _active_ids = {o.get('order_id') for o in orders}
     clear_stale_cooldowns(_active_ids)
-    # Clean up stale Kalman trackers
+    # Clean up stale Kalman trackers and suppress counters
     _stale_kalman = [k for k in _kalman_trackers if k not in _active_ids]
     for k in _stale_kalman:
         del _kalman_trackers[k]
+    _stale_suppress = [k for k in _kalman_suppress_counts if k not in _active_ids]
+    for k in _stale_suppress:
+        del _kalman_suppress_counts[k]
 
     now = datetime.datetime.now(ET)
     orders_modified = False
@@ -1275,6 +1281,7 @@ def check_and_close_positions():
         # CRITICAL: Check ITM risk (short strikes breached)
         spx_price = 0  # Default — set below on successful fetch
         current_vix = 25  # Default — set below on successful fetch
+        _vix_fetch_ok = False  # Track VIX fetch success for AI advisor gating
         try:
             # Fetch current SPX price
             spx_quote = requests.get(f"{MARKET_DATA_URL}/markets/quotes",
@@ -1284,13 +1291,20 @@ def check_and_close_positions():
             spx_price = float(spx_quote.get('quotes', {}).get('quote', {}).get('last', 0))
 
             # Fetch VIX alongside SPX (needed for AI hold advisor sigma calculation)
+            _vix_fetch_ok = False
             try:
                 _vix_q = requests.get(f"{MARKET_DATA_URL}/markets/quotes",
                                       params={"symbols": "VIX"},
                                       headers=LIVE_HEADERS, timeout=5).json()
-                current_vix = float(_vix_q.get('quotes', {}).get('quote', {}).get('last', 25))
+                _vix_val = _vix_q.get('quotes', {}).get('quote', {}).get('last')
+                if _vix_val is not None:
+                    current_vix = float(_vix_val)
+                    _vix_fetch_ok = True
             except Exception:
-                current_vix = 25  # Reasonable default
+                pass
+            if not _vix_fetch_ok:
+                current_vix = 25  # Conservative default — AI advisor will use mechanical stops
+                log(f"  ⚠️ VIX fetch failed — AI hold advisor disabled for this cycle (using mechanical stops)")
 
             if spx_price > 0:
                 # BUGFIX (2026-01-10): Parse strikes string to list
@@ -1349,6 +1363,10 @@ def check_and_close_positions():
         # CRITICAL: For stop loss, use ask_value (worst-case closing cost)
         # This prevents late stop loss triggers when bid/ask spread widens
         profit_pct_sl = (entry_credit - ask_value) / entry_credit
+
+        # Reset Kalman suppress counter when not in SL territory (position recovered)
+        if profit_pct_sl > -STOP_LOSS_PCT:
+            _kalman_suppress_counts.pop(order_id, None)
 
         # Track best profit for trailing stop (use mid-price for profit target)
         if profit_pct > best_profit_pct:
@@ -1570,12 +1588,19 @@ def check_and_close_positions():
                 elif profit_pct_sl <= -STOP_LOSS_PCT and position_age_sec >= SL_GRACE_PERIOD_SEC:
                     _sl_reason = f"Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
                     # Three-layer Kalman defense: extreme noise → suppress, normal → Haiku, clean → execute
-                    if KALMAN_NOISE_FILTER_ENABLED and _kalman_noise > KALMAN_NOISE_SUPPRESS_THRESHOLD:
-                        log(f"  📊 KALMAN SUPPRESS: {_sl_reason} — noise={_kalman_noise:.2f}x (>{KALMAN_NOISE_SUPPRESS_THRESHOLD}x threshold)")
+                    _suppress_count = _kalman_suppress_counts.get(order_id, 0)
+                    if KALMAN_NOISE_FILTER_ENABLED and _kalman_noise > KALMAN_NOISE_SUPPRESS_THRESHOLD and _suppress_count < KALMAN_MAX_SUPPRESS_COUNT:
+                        _kalman_suppress_counts[order_id] = _suppress_count + 1
+                        log(f"  📊 KALMAN SUPPRESS: {_sl_reason} — noise={_kalman_noise:.2f}x (>{KALMAN_NOISE_SUPPRESS_THRESHOLD}x threshold, {_suppress_count+1}/{KALMAN_MAX_SUPPRESS_COUNT})")
+                    elif KALMAN_NOISE_FILTER_ENABLED and _kalman_noise > KALMAN_NOISE_SUPPRESS_THRESHOLD:
+                        # Max suppressions reached — force through
+                        log(f"  📊 KALMAN MAX SUPPRESS: {_sl_reason} — noise={_kalman_noise:.2f}x but {_suppress_count} consecutive suppresses, forcing exit")
+                        exit_reason = _sl_reason
+                        _kalman_suppress_counts[order_id] = 0
                     elif KALMAN_NOISE_FILTER_ENABLED and _kalman_noise < KALMAN_NOISE_DIRECT_THRESHOLD:
                         log(f"  📊 KALMAN DIRECT: {_sl_reason} — noise={_kalman_noise:.2f}x (clean signal)")
                         exit_reason = _sl_reason
-                    elif AI_HOLD_ADVISOR_ENABLED and spx_price > 0:
+                    elif AI_HOLD_ADVISOR_ENABLED and spx_price > 0 and _vix_fetch_ok:
                         _ai_decision, _ai_conf, _ai_reason = ask_haiku_hold_or_close(
                             order, spx_price, current_vix,
                             _sl_reason, log_fn=log)
@@ -1602,7 +1627,7 @@ def check_and_close_positions():
         # GEX spreads: Auto-close — let Haiku evaluate if position should hold to expiry
         elif now.hour == AUTO_CLOSE_HOUR and now.minute >= AUTO_CLOSE_MINUTE and not is_holding:
             _auto_reason = "Auto-close 3:30 PM (0DTE)"
-            if AI_HOLD_ADVISOR_ENABLED and spx_price > 0:
+            if AI_HOLD_ADVISOR_ENABLED and spx_price > 0 and _vix_fetch_ok:
                 _ai_decision, _ai_conf, _ai_reason = ask_haiku_hold_or_close(
                     order, spx_price, current_vix,
                     _auto_reason, log_fn=log)
@@ -1625,7 +1650,7 @@ def check_and_close_positions():
         elif profit_pct >= progressive_tp_pct and not is_holding:
             _tp_reason = f"Profit Target ({progressive_tp_pct*100:.0f}%)"
             # AI Hold Advisor: ask Haiku if we should hold for more theta decay
-            if AI_HOLD_ADVISOR_ENABLED and spx_price > 0:
+            if AI_HOLD_ADVISOR_ENABLED and spx_price > 0 and _vix_fetch_ok:
                 _ai_decision, _ai_conf, _ai_reason = ask_haiku_hold_or_close(
                     order, spx_price, current_vix,
                     _tp_reason, log_fn=log)
@@ -1642,7 +1667,7 @@ def check_and_close_positions():
         elif trailing_active and trailing_stop_level is not None and profit_pct <= trailing_stop_level:
             _trail_reason = f"Trailing Stop ({trailing_stop_level*100:.0f}% from peak {best_profit_pct*100:.0f}%)"
             # AI Hold Advisor: ask Haiku if this is noise or real danger
-            if AI_HOLD_ADVISOR_ENABLED and spx_price > 0:
+            if AI_HOLD_ADVISOR_ENABLED and spx_price > 0 and _vix_fetch_ok:
                 _ai_decision, _ai_conf, _ai_reason = ask_haiku_hold_or_close(
                     order, spx_price, current_vix,
                     _trail_reason, log_fn=log)
@@ -1696,14 +1721,21 @@ def check_and_close_positions():
             # Three-layer Kalman defense: extreme noise → suppress, normal → Haiku, clean → execute
             elif position_age_sec >= SL_GRACE_PERIOD_SEC:
                 _sl_reason_reg = f"Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
-                if KALMAN_NOISE_FILTER_ENABLED and _kalman_noise > KALMAN_NOISE_SUPPRESS_THRESHOLD:
+                _suppress_count = _kalman_suppress_counts.get(order_id, 0)
+                if KALMAN_NOISE_FILTER_ENABLED and _kalman_noise > KALMAN_NOISE_SUPPRESS_THRESHOLD and _suppress_count < KALMAN_MAX_SUPPRESS_COUNT:
                     # Layer 1: Extreme noise — suppress entirely (bid/ask chaos)
-                    log(f"  📊 KALMAN SUPPRESS: {_sl_reason_reg} — noise={_kalman_noise:.2f}x (>{KALMAN_NOISE_SUPPRESS_THRESHOLD}x threshold)")
+                    _kalman_suppress_counts[order_id] = _suppress_count + 1
+                    log(f"  📊 KALMAN SUPPRESS: {_sl_reason_reg} — noise={_kalman_noise:.2f}x (>{KALMAN_NOISE_SUPPRESS_THRESHOLD}x threshold, {_suppress_count+1}/{KALMAN_MAX_SUPPRESS_COUNT})")
+                elif KALMAN_NOISE_FILTER_ENABLED and _kalman_noise > KALMAN_NOISE_SUPPRESS_THRESHOLD:
+                    # Max suppressions reached — force through
+                    log(f"  📊 KALMAN MAX SUPPRESS: {_sl_reason_reg} — noise={_kalman_noise:.2f}x but {_suppress_count} consecutive suppresses, forcing exit")
+                    exit_reason = _sl_reason_reg
+                    _kalman_suppress_counts[order_id] = 0
                 elif KALMAN_NOISE_FILTER_ENABLED and _kalman_noise < KALMAN_NOISE_DIRECT_THRESHOLD:
                     # Layer 3: Clean signal — execute directly (real danger, no need for Haiku)
                     log(f"  📊 KALMAN DIRECT: {_sl_reason_reg} — noise={_kalman_noise:.2f}x (clean signal)")
                     exit_reason = _sl_reason_reg
-                elif AI_HOLD_ADVISOR_ENABLED and spx_price > 0:
+                elif AI_HOLD_ADVISOR_ENABLED and spx_price > 0 and _vix_fetch_ok:
                     # Layer 2: Normal noise — let Haiku evaluate
                     _ai_decision, _ai_conf, _ai_reason = ask_haiku_hold_or_close(
                         order, spx_price, current_vix, _sl_reason_reg, log_fn=log)

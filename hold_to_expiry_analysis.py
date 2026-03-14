@@ -22,15 +22,6 @@ from pathlib import Path
 ET = pytz.timezone('America/New_York')
 
 # Tradier API for historical SPX data
-def _load_tradier_key():
-    for env_file in ['/etc/gamma.env', '/etc/trader.env']:
-        if Path(env_file).exists():
-            with open(env_file) as f:
-                for line in f:
-                    if line.startswith('TRADIER_TOKEN=') or line.startswith('TRADIER_API_KEY='):
-                        return line.split('=', 1)[1].strip().strip('"').strip("'")
-    return None
-
 def _load_tradier_live_key():
     for env_file in ['/etc/gamma.env']:
         if Path(env_file).exists():

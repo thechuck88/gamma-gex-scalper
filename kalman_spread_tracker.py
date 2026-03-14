@@ -20,7 +20,6 @@ Usage:
 """
 
 import sys
-import os
 
 # Add MNQ core to path for KalmanVelocityTracker import
 sys.path.insert(0, '/root/topstocks')

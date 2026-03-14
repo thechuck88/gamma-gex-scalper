@@ -23,7 +23,7 @@ import time
 import pytz
 import requests
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +106,6 @@ def _fetch_recent_spx_bars(n_minutes=10):
         now_et = datetime.now(et)
         start = now_et.replace(second=0, microsecond=0)
         # Go back n_minutes
-        from datetime import timedelta
         start = start - timedelta(minutes=n_minutes)
 
         resp = requests.get("https://api.tradier.com/v1/markets/timesales",
