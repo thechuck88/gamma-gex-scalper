@@ -63,6 +63,7 @@ from config import (
 from threading import Timer
 from discord_autodelete import DiscordAutoDelete
 from ai_hold_advisor import ask_haiku_hold_or_close, clear_cooldown, clear_stale_cooldowns
+from kalman_spread_tracker import create_tracker as create_kalman_tracker
 
 # Timezone
 ET = pytz.timezone('America/New_York')
@@ -95,6 +96,15 @@ TRAILING_TIGHTEN_RATE = 0.4     # How fast it tightens (0.4 = every 2.5% gain, t
 AI_HOLD_ADVISOR_ENABLED = True  # Ask Haiku before closing on trailing stop / profit target / regular SL
 AI_HOLD_MIN_CONFIDENCE = 65     # Minimum confidence to accept HOLD on trailing/TP
 AI_HOLD_SL_MIN_CONFIDENCE = 75  # Higher bar for suppressing stop losses (more dangerous to hold)
+
+# Kalman noise filter — filters bid/ask noise on spread mid-prices before stop evaluation
+KALMAN_NOISE_FILTER_ENABLED = True   # Enable Kalman filtering of spread prices
+KALMAN_NOISE_SUPPRESS_THRESHOLD = 3.0  # noise_level > 3.0 → suppress stop (extreme noise)
+KALMAN_NOISE_DIRECT_THRESHOLD = 0.7    # noise_level < 0.7 → execute directly (clean signal)
+# Between 0.7 and 3.0 → Haiku evaluates (normal operation)
+
+# Module-level Kalman tracker storage (order_id → tracker)
+_kalman_trackers = {}
 
 # Stop loss grace period - let positions settle before triggering SL
 SL_GRACE_PERIOD_SEC = 540       # OPTIMIZATION #2: 9 minutes grace (allows 0DTE to work through initial gamma volatility)
@@ -589,6 +599,7 @@ def remove_order(order_id, verified_closed_at_broker=False, reason="unknown"):
     if len(orders) < original_count:
         save_orders(orders)
         clear_cooldown(order_id)  # Clear AI hold advisor cooldown
+        _kalman_trackers.pop(order_id, None)  # Clear Kalman tracker
         log(f"🗑️  POSITION REMOVED FROM TRACKING: {order_id}")
         log(f"   ✅ Verified closed at broker: YES")
         log(f"   Reason: {reason}")
@@ -1111,7 +1122,12 @@ def check_and_close_positions():
         return
 
     # Clean up stale AI hold cooldowns for closed positions
-    clear_stale_cooldowns({o.get('order_id') for o in orders})
+    _active_ids = {o.get('order_id') for o in orders}
+    clear_stale_cooldowns(_active_ids)
+    # Clean up stale Kalman trackers
+    _stale_kalman = [k for k in _kalman_trackers if k not in _active_ids]
+    for k in _stale_kalman:
+        del _kalman_trackers[k]
 
     now = datetime.datetime.now(ET)
     orders_modified = False
@@ -1241,6 +1257,20 @@ def check_and_close_positions():
         if current_value is None:
             log(f"Could not get value for {order_id} — will retry")
             continue
+
+        # Kalman noise filter: feed mid-price to tracker
+        _kalman_noise = 1.0  # Default: normal noise
+        _kalman_filtered = current_value
+        if KALMAN_NOISE_FILTER_ENABLED and current_value > 0:
+            if order_id not in _kalman_trackers:
+                _kalman_trackers[order_id] = create_kalman_tracker(entry_credit)
+            _kt = _kalman_trackers[order_id]
+            _kt.update(current_value, time.time())
+            _kalman_noise = _kt.noise_level()
+            _kalman_filtered = _kt._x[0] if _kt._initialized else current_value
+            if _kt._observations % 10 == 0 or _kalman_noise > 2.0:
+                log(f"  📊 Kalman {order_id}: raw=${current_value:.2f} filtered=${_kalman_filtered:.2f} "
+                    f"noise={_kalman_noise:.2f}x vel={_kt.velocity():.4f}/s obs={_kt._observations}")
 
         # CRITICAL: Check ITM risk (short strikes breached)
         spx_price = 0  # Default — set below on successful fetch
@@ -1539,17 +1569,22 @@ def check_and_close_positions():
                         exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case){override_msg}"
                 elif profit_pct_sl <= -STOP_LOSS_PCT and position_age_sec >= SL_GRACE_PERIOD_SEC:
                     _sl_reason = f"Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
-                    # AI Hold Advisor: most SL triggers on 0DTE are bid/ask noise, not real danger
-                    if AI_HOLD_ADVISOR_ENABLED and spx_price > 0:
+                    # Three-layer Kalman defense: extreme noise → suppress, normal → Haiku, clean → execute
+                    if KALMAN_NOISE_FILTER_ENABLED and _kalman_noise > KALMAN_NOISE_SUPPRESS_THRESHOLD:
+                        log(f"  📊 KALMAN SUPPRESS: {_sl_reason} — noise={_kalman_noise:.2f}x (>{KALMAN_NOISE_SUPPRESS_THRESHOLD}x threshold)")
+                    elif KALMAN_NOISE_FILTER_ENABLED and _kalman_noise < KALMAN_NOISE_DIRECT_THRESHOLD:
+                        log(f"  📊 KALMAN DIRECT: {_sl_reason} — noise={_kalman_noise:.2f}x (clean signal)")
+                        exit_reason = _sl_reason
+                    elif AI_HOLD_ADVISOR_ENABLED and spx_price > 0:
                         _ai_decision, _ai_conf, _ai_reason = ask_haiku_hold_or_close(
                             order, spx_price, current_vix,
                             _sl_reason, log_fn=log)
                         if _ai_decision == 'HOLD' and _ai_conf >= AI_HOLD_SL_MIN_CONFIDENCE:
-                            log(f"🧠 AI HOLD: Suppressing {_sl_reason} — Haiku says HOLD ({_ai_conf}%): {_ai_reason}")
+                            log(f"🧠 AI HOLD: Suppressing {_sl_reason} (noise={_kalman_noise:.2f}x) — Haiku ({_ai_conf}%): {_ai_reason}")
                         else:
                             exit_reason = _sl_reason
                             if _ai_decision == 'CLOSE':
-                                log(f"🧠 AI CLOSE: Confirming {_sl_reason} — Haiku agrees ({_ai_conf}%): {_ai_reason}")
+                                log(f"🧠 AI CLOSE: Confirming {_sl_reason} (noise={_kalman_noise:.2f}x) — Haiku ({_ai_conf}%): {_ai_reason}")
                     else:
                         exit_reason = _sl_reason
                 elif profit_pct_sl <= -STOP_LOSS_PCT:
@@ -1658,8 +1693,28 @@ def check_and_close_positions():
                     override_msg = f" [override: {override_reason}]" if should_override else ""
                     exit_reason = f"EMERGENCY Stop Loss ({profit_pct_sl*100:.0f}% worst-case){override_msg}"
             # Normal stop loss - only after grace period
+            # Three-layer Kalman defense: extreme noise → suppress, normal → Haiku, clean → execute
             elif position_age_sec >= SL_GRACE_PERIOD_SEC:
-                exit_reason = f"Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
+                _sl_reason_reg = f"Stop Loss ({profit_pct_sl*100:.0f}% worst-case)"
+                if KALMAN_NOISE_FILTER_ENABLED and _kalman_noise > KALMAN_NOISE_SUPPRESS_THRESHOLD:
+                    # Layer 1: Extreme noise — suppress entirely (bid/ask chaos)
+                    log(f"  📊 KALMAN SUPPRESS: {_sl_reason_reg} — noise={_kalman_noise:.2f}x (>{KALMAN_NOISE_SUPPRESS_THRESHOLD}x threshold)")
+                elif KALMAN_NOISE_FILTER_ENABLED and _kalman_noise < KALMAN_NOISE_DIRECT_THRESHOLD:
+                    # Layer 3: Clean signal — execute directly (real danger, no need for Haiku)
+                    log(f"  📊 KALMAN DIRECT: {_sl_reason_reg} — noise={_kalman_noise:.2f}x (clean signal)")
+                    exit_reason = _sl_reason_reg
+                elif AI_HOLD_ADVISOR_ENABLED and spx_price > 0:
+                    # Layer 2: Normal noise — let Haiku evaluate
+                    _ai_decision, _ai_conf, _ai_reason = ask_haiku_hold_or_close(
+                        order, spx_price, current_vix, _sl_reason_reg, log_fn=log)
+                    if _ai_decision == 'HOLD' and _ai_conf >= AI_HOLD_SL_MIN_CONFIDENCE:
+                        log(f"🧠 AI HOLD: Suppressing {_sl_reason_reg} (noise={_kalman_noise:.2f}x) — Haiku ({_ai_conf}%): {_ai_reason}")
+                    else:
+                        exit_reason = _sl_reason_reg
+                        if _ai_decision == 'CLOSE':
+                            log(f"🧠 AI CLOSE: Confirming {_sl_reason_reg} (noise={_kalman_noise:.2f}x) — Haiku ({_ai_conf}%): {_ai_reason}")
+                else:
+                    exit_reason = _sl_reason_reg
             else:
                 # In grace period - log but don't exit yet
                 grace_remaining = SL_GRACE_PERIOD_SEC - position_age_sec
